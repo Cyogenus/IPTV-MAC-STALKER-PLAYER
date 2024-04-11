@@ -20,4 +20,5 @@ Please contribute to this project so we can complete it.
 
 
 
-![Screenshot 2024-04-10 215258](https://github.com/Cyogenus/IPTV-MAC-STALKER-PLAYER/assets/80471318/9abef655-4806-444a-b976-431056adb318)
+
+![Screenshot 2024-04-11 094621](https://github.com/Cyogenus/IPTV-MAC-STALKER-PLAYER/assets/80471318/f3efdbb0-9057-474d-908a-dc23a7108e0a)
