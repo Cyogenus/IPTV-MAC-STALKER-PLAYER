@@ -1,11 +1,23 @@
+MAC-Based IPTV Player for Windows ---> Please contribute to this project so we can complete it. 
 
-I'm looking for assistance to complete development on an IPTV MAC STALKER PLAYER for Windows. Currently, there's a gap in the market for a reliable MAC IPTV player on Windows, and collaborating together could transform this into a top-tier program for Windows users. If anyone is interested in contributing, it would be greatly appreciated.
+This is an open-source MAC-Based IPTV Player application designed to stream channels, video-on-demand (VOD), and series from MAC-Based IPTV portals on Windows machines. The player is currently under development and requires contributions to complete.
 
-The Goal is to have this player work on all Mac login iptv portals. I have the player using the VCL Player to play the files and it's free to download for anyone to use.
+Features
+MAC-Based IPTV Support: Access and stream content from MAC-Based IPTV portals.
+Channel Streaming: Watch live channels provided by the IPTV service.
+VOD and Series Playback: Enjoy on-demand movies and TV series.
+VLC Player Integration: VLC Player is the preferred external media player for playback.
+Getting Started
+To contribute to this project, follow these steps:
 
-I hope more people pitch in this project and make this a sucesss. I havent seen anyone upload a Mac/STALKER based IPTV Player on Github.
+Prerequisites
+Windows operating system.
+Python 3.x installed on your system.
+VLC Media Player installed on your machine
 
-Let's Do this....
+
+Please contribute to this project so we can complete it. 
+
 
 
 ![Screenshot 2024-04-10 215258](https://github.com/Cyogenus/IPTV-MAC-STALKER-PLAYER/assets/80471318/9abef655-4806-444a-b976-431056adb318)
