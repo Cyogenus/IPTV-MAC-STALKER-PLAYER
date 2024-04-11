@@ -1,1 +1,1 @@
-IF anyone would like to help me finish this IPTV MAC STALKER PLAYER that would be great. there isn't a real good mac iptv player for windows and we can contribute to make this to be a good program to use for windows.
+IF anyone would like to help me finish this IPTV MAC STALKER PLAYER that would be great. There isn't a real good mac iptv player for windows and we can contribute to make this to be a good program to use for windows.
