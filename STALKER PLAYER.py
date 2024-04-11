@@ -352,8 +352,8 @@ class MainWindow(QMainWindow):
                         self.playlist_model.appendRow(list_item)
                         
                     self.playlist_view.clicked.connect(self.on_playlist_item_clicked)  # Connect the clicked signal to a slot method
-                else:
-                    self.show_error_message("F")
+                
+                    
             else:
                 self.show_error_message("Failed to retrieve token.")
         except Exception as e:
@@ -422,26 +422,86 @@ class MainWindow(QMainWindow):
         self.playlist_model = QStandardItemModel(self.playlist_view)
         self.playlist_view.setModel(self.playlist_model)
 
+        # Add a "Go Back" item at the top
+        go_back_item = QStandardItem("Go Back")
+        self.playlist_model.appendRow(go_back_item)
+
         for item in playlist:
             name = item['name']
-            
+
             category_type = item['category_type']
             category_id = item.get('genre_id') or item.get('category_id')
             list_item = QStandardItem(f"{category_type}: {name} (ID: {category_id})")
             list_item.setData(category_id, QtCore.Qt.UserRole)  # Store category ID as item data
-            
+
             self.playlist_model.appendRow(list_item)
+
+
+
 
 
 
     def on_playlist_selection_changed(self, index):
         if index.isValid():
             item = self.playlist_model.itemFromIndex(index)
-            category_type = item.text().split(":")[0].strip()
-            print("Selected Category Type:", category_type)
-            category_id = item.data(QtCore.Qt.UserRole)
-            print("Selected Category ID:", category_id)
-            self.retrieve_channels(category_type, category_id)
+            item_text = item.text()
+
+            if item_text == "Go Back":
+                # Handle the "Go Back" action, e.g., return to the previous view
+                self.return_to_previous_view()
+            else:
+                category_type = item_text.split(":")[0].strip()
+                print("Selected Category Type:", category_type)
+                category_id = item.data(QtCore.Qt.UserRole)
+                print("Selected Category ID:", category_id)
+                self.retrieve_channels(category_type, category_id)
+
+                # Check if you are inside a category and add/remove "Go Back" accordingly
+                if category_id:
+                    go_back_item = QStandardItem("Go Back")
+                    self.playlist_model.insertRow(0, go_back_item)
+
+                    # Make an HTTP request to the specified URL
+                    url = f"http://{self.hostname_input.text()}/portal.php?type=vod&action=create_link&cmd={category_id}&series=&forced_storage=&disable_ad=0&download=0&force_ch_link_check=0&JsHttpRequest=1-xml&mac={self.mac_input.text()}"
+                    headers = {'Accept': 'application/json'}
+
+                    try:
+                        response = requests.get(url, headers=headers)
+                        response.raise_for_status()
+
+                        json_response = response.json()
+
+                        # Extract the movie file URL from the response
+                        cmd_value = json_response.get("js", {}).get("cmd")
+
+                        if cmd_value:
+                            # Extracting the movie file URL from the cmd value
+                            movie_file_url = cmd_value.split(' ')[1]
+                            print("Movie File URL:", movie_file_url)
+
+                            # Retrieve VLC executable path from your settings
+                            vlc_executable = self.settings.value("media_player", "")
+
+                            if vlc_executable:
+                                try:
+                                    # Launch VLC with the movie file URL
+                                    subprocess.Popen([vlc_executable, movie_file_url])
+                                except Exception as e:
+                                    print(f"Error opening VLC player: {e}")
+                            else:
+                                print("VLC executable path not found in settings.")
+                        else:
+                            print("Movie File URL not found in the response.")
+
+                    except requests.exceptions.RequestException as e:
+                        print(f"Error making request: {e}")
+
+                else:
+                    # Remove "Go Back" when not inside a category
+                    self.playlist_model.removeRow(0)
+
+
+
 
             
 
