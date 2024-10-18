@@ -3,6 +3,7 @@ import traceback
 import requests
 import subprocess
 import logging
+import re
 from PyQt5.QtCore import QSettings, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QMessageBox,
@@ -34,9 +35,12 @@ def get_token(session, url, mac_address):
         cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
         headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)"}
         response = session.get(handshake_url, cookies=cookies, headers=headers)
-        token = response.json()["js"]["token"]
+        token = response.json().get("js", {}).get("token")
         if token:
             return token
+        else:
+            logging.error("Token not found in handshake response.")
+            return None
     except Exception as e:
         logging.error(f"Error getting token: {e}")
         return None
@@ -100,6 +104,7 @@ class RequestThread(QThread):
                 self.update_progress.emit(0)  # Reset progress if token fails
 
         except Exception as e:
+            logging.error(f"Request thread error: {str(e)}")
             traceback.print_exc()
             self.request_complete.emit({})  # Emit empty data in case of an error
             self.update_progress.emit(0)  # Reset progress on error
@@ -108,18 +113,11 @@ class RequestThread(QThread):
         try:
             genres_url = f"{url}/portal.php?type=itv&action=get_genres&JsHttpRequest=1-xml"
             cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-            headers = {
-                "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                "Authorization": "Bearer " + token,
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": "Bearer " + token}
             response = session.get(genres_url, cookies=cookies, headers=headers)
-            genre_data = response.json()["js"]
+            genre_data = response.json().get("js", [])
             if genre_data:
-                genres = []
-                for i in genre_data:
-                    gid = i["id"]
-                    name = i["title"]
-                    genres.append({"name": name, "category_type": "IPTV", "category_id": gid})
+                genres = [{"name": i["title"], "category_type": "IPTV", "category_id": i["id"]} for i in genre_data]
                 return genres
         except Exception as e:
             logging.error(f"Error getting genres: {e}")
@@ -129,18 +127,11 @@ class RequestThread(QThread):
         try:
             vod_url = f"{url}/portal.php?type=vod&action=get_categories&JsHttpRequest=1-xml"
             cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-            headers = {
-                "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                "Authorization": "Bearer " + token,
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": "Bearer " + token}
             response = session.get(vod_url, cookies=cookies, headers=headers)
-            categories_data = response.json()["js"]
+            categories_data = response.json().get("js", [])
             if categories_data:
-                categories = []
-                for category in categories_data:
-                    category_id = category["id"]
-                    name = category["title"]
-                    categories.append({"name": name, "category_type": "VOD", "category_id": category_id})
+                categories = [{"name": category["title"], "category_type": "VOD", "category_id": category["id"]} for category in categories_data]
                 return categories
         except Exception as e:
             logging.error(f"Error getting VOD categories: {e}")
@@ -150,10 +141,7 @@ class RequestThread(QThread):
         try:
             series_url = f"{url}/portal.php?type=series&action=get_categories&JsHttpRequest=1-xml"
             cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-            headers = {
-                "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                "Authorization": "Bearer " + token,
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": "Bearer " + token}
             response = session.get(series_url, cookies=cookies, headers=headers)
             response_json = response.json()
 
@@ -162,19 +150,9 @@ class RequestThread(QThread):
                 logging.error("Unexpected response structure for series categories.")
                 return []
 
-            categories_data = response_json['js']
-            if isinstance(categories_data, list):
-                categories = []
-                for category in categories_data:
-                    category_id = category.get("id")
-                    name = category.get("title")
-                    if category_id and name:
-                        categories.append({"name": name, "category_type": "Series", "category_id": category_id})
-                return categories
-            else:
-                logging.error("Series categories data is not a list.")
-                return []
-
+            categories_data = response_json.get('js', [])
+            categories = [{"name": category["title"], "category_type": "Series", "category_id": category["id"]} for category in categories_data]
+            return categories
         except Exception as e:
             logging.error(f"Error getting series categories: {e}")
             return []
@@ -183,64 +161,34 @@ class RequestThread(QThread):
         try:
             channels = []
             cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-            headers = {
-                "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                "Authorization": "Bearer " + token,
-            }
-
+            headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": f"Bearer {token}"}
             page_number = 0
-            self.update_progress.emit(10)  # Set initial progress for channel loading
             while True:
                 page_number += 1
                 if category_type == "IPTV":
-                    channels_url = (
-                        f"{url}/portal.php?type=itv&action=get_ordered_list&genre={category_id}&force_ch_link_check=&fav=0&"
-                        f"sortby=number&hd=0&p={page_number}&JsHttpRequest=1-xml&from_ch_id=0"
-                    )
+                    channels_url = f"{url}/portal.php?type=itv&action=get_ordered_list&genre={category_id}&JsHttpRequest=1-xml&p={page_number}"
                 elif category_type == "VOD":
-                    channels_url = (
-                        f"{url}/portal.php?type=vod&action=get_ordered_list&category={category_id}&p={page_number}&JsHttpRequest=1-xml"
-                    )
+                    channels_url = f"{url}/portal.php?type=vod&action=get_ordered_list&category={category_id}&JsHttpRequest=1-xml&p={page_number}"
                 elif category_type == "Series":
-                    channels_url = (
-                        f"{url}/portal.php?type=series&action=get_ordered_list&category={category_id}&p={page_number}&JsHttpRequest=1-xml"
-                    )
+                    channels_url = f"{url}/portal.php?type=series&action=get_ordered_list&category={category_id}&p={page_number}&JsHttpRequest=1-xml"
                 else:
                     break
 
                 response = session.get(channels_url, cookies=cookies, headers=headers)
                 if response.status_code == 200:
-                    try:
-                        response_json = response.json()
-                        channels_data = response_json["js"]["data"]
-                        if not channels_data:
-                            break
-                        # Set item_type based on category_type
-                        if category_type == "Series":
-                            for channel in channels_data:
-                                channel['item_type'] = 'series'
-                        elif category_type == "VOD":
-                            for channel in channels_data:
-                                channel['item_type'] = 'vod'
-                        else:
-                            for channel in channels_data:
-                                channel['item_type'] = 'channel'
-                        channels.extend(channels_data)
-                        total_items = response_json["js"]["total_items"]
-                        if len(channels) >= total_items:
-                            break
-                    except ValueError:
-                        logging.error("Invalid JSON format in response")
+                    channels_data = response.json().get("js", {}).get("data", [])
+                    if not channels_data:
+                        break
+                    for channel in channels_data:
+                        channel['item_type'] = 'series' if category_type == "Series" else 'vod' if category_type == "VOD" else 'channel'
+                    channels.extend(channels_data)
+                    total_items = response.json().get("js", {}).get("total_items", len(channels))
+                    if len(channels) >= total_items:
                         break
                 else:
                     logging.error(f"Request failed for page {page_number}")
                     break
-
-                self.update_progress.emit(50)  # Update progress while loading channels
-
-            self.update_progress.emit(100)  # Set final progress for channel loading
             return channels
-
         except Exception as e:
             logging.error(f"An error occurred while retrieving channels: {str(e)}")
             return []
@@ -254,9 +202,7 @@ class MainWindow(QMainWindow):
 
         # Set the Fusion theme
         app.setStyle("Fusion")
-        # Create QSettings object
 
-        
         self.settings = QSettings("MyCompany", "IPTVPlayer")
 
         central_widget = QWidget(self)
@@ -321,13 +267,12 @@ class MainWindow(QMainWindow):
                 'tab_widget': tab,
                 'playlist_view': playlist_view,
                 'playlist_model': playlist_model,
-                # Initialize navigation variables for this tab
                 'current_category': None,
                 'navigation_stack': [],
                 'playlist_data': [],
                 'current_channels': [],
                 'current_series_info': [],
-                'current_view': 'categories',  # Track the current view
+                'current_view': 'categories',
             }
 
         # Create a purple progress bar at the bottom
@@ -344,25 +289,15 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
 
-
         # Load settings
         self.load_settings()
 
     def load_settings(self):
-        # Load hostname from settings
-        hostname = self.settings.value("hostname", "")
-        self.hostname_input.setText(hostname)
-
-        # Load MAC address from settings
-        mac_address = self.settings.value("mac_address", "")
-        self.mac_input.setText(mac_address)
-
-        # Load media player from settings
-        media_player = self.settings.value("media_player", "")
-        self.media_player_input.setText(media_player)
+        self.hostname_input.setText(self.settings.value("hostname", ""))
+        self.mac_input.setText(self.settings.value("mac_address", ""))
+        self.media_player_input.setText(self.settings.value("media_player", ""))
 
     def closeEvent(self, event):
-        # Save settings before closing the application
         self.save_settings()
         event.accept()
 
@@ -393,27 +328,21 @@ class MainWindow(QMainWindow):
         media_player = self.media_player_input.text()
 
         if not hostname_input or not mac_address or not media_player:
-            QMessageBox.warning(
-                self, "Warning", "Please enter the Hostname, MAC Address, and Media Player."
-            )
+            QMessageBox.warning(self, "Warning", "Please enter the Hostname, MAC Address, and Media Player.")
             return
 
-        # Parse the hostname input
         parsed_url = urlparse(hostname_input)
         if not parsed_url.scheme and not parsed_url.netloc:
-            # If no scheme and netloc, assume http and parse again
             parsed_url = urlparse(f"http://{hostname_input}")
         elif not parsed_url.scheme:
-            # If scheme is missing but netloc exists
             parsed_url = parsed_url._replace(scheme='http')
 
-        # Reconstruct the base URL
         self.base_url = urlunparse((parsed_url.scheme, parsed_url.netloc, '', '', '', ''))
         self.mac_address = mac_address
 
         self.request_thread = RequestThread(self.base_url, mac_address)
         self.request_thread.request_complete.connect(self.on_initial_playlist_received)
-        self.request_thread.update_progress.connect(self.progress_bar.setValue)  # Update progress bar
+        self.request_thread.update_progress.connect(self.progress_bar.setValue)
         self.request_thread.start()
 
     def on_initial_playlist_received(self, data):
@@ -434,12 +363,10 @@ class MainWindow(QMainWindow):
         tab_info['current_view'] = 'categories'
 
         if tab_info['navigation_stack']:
-            # Add "Go Back" item
             go_back_item = QStandardItem("Go Back")
             playlist_model.appendRow(go_back_item)
 
         if tab_info['current_category'] is None:
-            # At the top level, show categories
             for item in tab_info['playlist_data']:
                 name = item["name"]
                 list_item = QStandardItem(name)
@@ -447,7 +374,6 @@ class MainWindow(QMainWindow):
                 list_item.setData('category', QtCore.Qt.UserRole + 1)
                 playlist_model.appendRow(list_item)
         else:
-            # Inside a category, retrieve channels
             self.retrieve_channels(tab_name, tab_info['current_category'])
 
     def retrieve_channels(self, tab_name, category):
@@ -455,9 +381,9 @@ class MainWindow(QMainWindow):
         category_type = category["category_type"]
         category_id = category.get("category_id") or category.get("genre_id")
         try:
-            self.progress_bar.setValue(0)  # Reset progress bar
+            self.progress_bar.setValue(0)
             self.request_thread = RequestThread(self.base_url, self.mac_address, category_type, category_id)
-            self.request_thread.update_progress.connect(self.progress_bar.setValue)  # Update progress bar
+            self.request_thread.update_progress.connect(self.progress_bar.setValue)
             self.request_thread.channels_loaded.connect(lambda channels: self.on_channels_loaded(tab_name, channels))
             self.request_thread.start()
         except Exception as e:
@@ -476,9 +402,9 @@ class MainWindow(QMainWindow):
         tab_info['current_view'] = 'channels'
 
         if tab_info['navigation_stack']:
-            # Add "Go Back" item
             go_back_item = QStandardItem("Go Back")
             playlist_model.appendRow(go_back_item)
+
         for channel in tab_info['current_channels']:
             channel_name = channel["name"]
             list_item = QStandardItem(channel_name)
@@ -505,202 +431,174 @@ class MainWindow(QMainWindow):
             item_text = item.text()
 
             if item_text == "Go Back":
+                # Handle 'Go Back' functionality
                 if tab_info['navigation_stack']:
                     nav_state = tab_info['navigation_stack'].pop()
                     tab_info['current_category'] = nav_state['category']
                     tab_info['current_view'] = nav_state['view']
+                    tab_info['current_series_info'] = nav_state['series_info']  # Restore series_info
+                    logging.debug(f"Go Back to view: {tab_info['current_view']}")
                     if tab_info['current_view'] == 'categories':
                         self.update_playlist_view(current_tab)
                     elif tab_info['current_view'] == 'channels':
                         self.update_channel_view(current_tab)
                     elif tab_info['current_view'] in ['seasons', 'episodes']:
                         self.update_series_view(current_tab)
+                else:
+                    logging.debug("Navigation stack is empty. Cannot go back.")
+                    QMessageBox.information(self, "Info", "No previous view to go back to.")
             else:
                 item_data = item.data(QtCore.Qt.UserRole)
                 item_type = item.data(QtCore.Qt.UserRole + 1)
                 logging.debug(f"Item data: {item_data}, item type: {item_type}")
+
                 if item_type == 'category':
-                    tab_info['navigation_stack'].append({'category': tab_info['current_category'], 'view': tab_info['current_view']})
+                    # Navigate into a category
+                    tab_info['navigation_stack'].append({
+                        'category': tab_info['current_category'],
+                        'view': tab_info['current_view'],
+                        'series_info': tab_info['current_series_info']  # Preserve current_series_info
+                    })
                     tab_info['current_category'] = item_data
+                    logging.debug(f"Navigating to category: {item_data.get('name')}")
                     self.retrieve_channels(current_tab, tab_info['current_category'])
+
                 elif item_type == 'series':
-                    tab_info['navigation_stack'].append({'category': tab_info['current_category'], 'view': tab_info['current_view']})
+                    # User selected a series, retrieve its seasons
+                    tab_info['navigation_stack'].append({
+                        'category': tab_info['current_category'],
+                        'view': tab_info['current_view'],
+                        'series_info': tab_info['current_series_info']  # Preserve current_series_info
+                    })
                     tab_info['current_category'] = item_data
+                    logging.debug(f"Navigating to series: {item_data.get('name')}")
                     self.retrieve_series_info(current_tab, item_data)
+
                 elif item_type == 'season':
-                    tab_info['navigation_stack'].append({'category': tab_info['current_category'], 'view': tab_info['current_view']})
+                    # User selected a season, set navigation context
+                    tab_info['navigation_stack'].append({
+                        'category': tab_info['current_category'],
+                        'view': tab_info['current_view'],
+                        'series_info': tab_info['current_series_info']  # Preserve current_series_info
+                    })
                     tab_info['current_category'] = item_data
-                    series_data = tab_info['navigation_stack'][-1]['category']
-                    self.retrieve_series_info(current_tab, series_data, season_number=item_data["season_number"])
+
+                    # Update view to 'seasons'
+                    tab_info['current_view'] = 'seasons'
+                    self.update_series_view(current_tab)
+
+                    # Retrieve episodes using the season data
+                    logging.debug(f"Fetching episodes for season {item_data['season_number']} in series {item_data['name']}")
+                    self.retrieve_series_info(current_tab, item_data, season_number=item_data["season_number"])
+
                 elif item_type == 'episode':
-                    self.play_channel(item_data)
-                elif item_type == 'channel' or item_type == 'vod':
+                    # User selected an episode, play it
+                    logging.debug(f"Playing episode: {item_data.get('name')}")
                     self.play_channel(item_data)
 
-    def retrieve_series_info(self, tab_name, series_data, season_number=None):
+                elif item_type == 'channel' or item_type == 'vod':
+                    # This is an IPTV channel or VOD, play it
+                    logging.debug(f"Playing channel/VOD: {item_data.get('name')}")
+                    self.play_channel(item_data)
+
+                else:
+                    logging.error("Unknown item type")
+
+    def retrieve_series_info(self, tab_name, context_data, season_number=None):
         tab_info = self.tabs[tab_name]
         try:
             session = requests.Session()
             url = self.base_url
             mac_address = self.mac_address
             token = get_token(session, url, mac_address)
+
             if token:
-                series_id = series_data.get("id")
+                series_id = context_data.get("id")
                 if not series_id:
-                    logging.error(f"Series ID missing in series data: {series_data}")
+                    logging.error(f"Series ID missing in context data: {context_data}")
                     return
 
                 cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                    "Authorization": "Bearer " + token,
-                }
+                headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": f"Bearer {token}"}
 
                 if season_number is None:
+                    # Fetch seasons
                     all_seasons = []
                     page_number = 0
+                    seasons_url = f"{url}/portal.php?type=series&action=get_ordered_list&movie_id={series_id}&season_id=0&episode_id=0&JsHttpRequest=1-xml&p={page_number}"
+                    logging.debug(f"Fetching seasons URL: {seasons_url}, headers: {headers}, cookies: {cookies}")
 
-                    seasons_url = (
-                        f"{url}/portal.php?type=series&action=get_ordered_list"
-                        f"&movie_id={series_id}"
-                        f"&season_id=0&episode_id=0"
-                        f"&JsHttpRequest=1-xml&p={page_number}"
-                    )
-
-                    response = session.get(seasons_url, cookies=cookies, headers=headers)
-                    response.raise_for_status()
-
-                    response_json = response.json()
-                    response_js = response_json.get("js", {})
-                    seasons = response_js.get("data", [])
-                    total_items = response_js.get("total_items", 0)
-                    max_page_items = response_js.get("max_page_items", 0)
-
-                    all_seasons.extend(seasons)
-
-                    if max_page_items:
-                        total_pages = (total_items + max_page_items - 1) // max_page_items
-                    else:
-                        logging.error("max_page_items is zero or undefined.")
-                        return
-
-                    for i in range(1, total_pages):
-                        page_number = i
-                        seasons_url = (
-                            f"{url}/portal.php?type=series&action=get_ordered_list"
-                            f"&movie_id={series_id}"
-                            f"&season_id=0&episode_id=0"
-                            f"&JsHttpRequest=1-xml&p={page_number}"
-                        )
-
+                    while True:
                         response = session.get(seasons_url, cookies=cookies, headers=headers)
-                        response.raise_for_status()
+                        logging.debug(f"Seasons response: {response.text}")
+                        if response.status_code == 200:
+                            seasons_data = response.json().get("js", {}).get("data", [])
+                            if not seasons_data:
+                                break
+                            for season in seasons_data:
+                                season_id = season.get('id', '')
+                                season_number_extracted = None
+                                if season_id.startswith('season'):
+                                    match = re.match(r'season(\d+)', season_id)
+                                    if match:
+                                        season_number_extracted = int(match.group(1))
+                                    else:
+                                        logging.error(f"Unexpected season id format: {season_id}")
+                                else:
+                                    match = re.match(r'\d+:(\d+)', season_id)
+                                    if match:
+                                        season_number_extracted = int(match.group(1))
+                                    else:
+                                        logging.error(f"Unexpected season id format: {season_id}")
 
-                        response_json = response.json()
-                        response_js = response_json.get("js", {})
-                        seasons = response_js.get("data", [])
-
-                        all_seasons.extend(seasons)
+                                season['season_number'] = season_number_extracted
+                                season['item_type'] = 'season'
+                            all_seasons.extend(seasons_data)
+                            total_items = response.json().get("js", {}).get("total_items", len(all_seasons))
+                            if len(all_seasons) >= total_items:
+                                break
+                        else:
+                            logging.error(f"Failed to fetch seasons for page {page_number}")
+                            break
 
                     if all_seasons:
-                        for index, season in enumerate(all_seasons, start=1):
-                            season['season_number'] = season.get('season_number', index)
-                            season['series_id'] = series_id
-                            season['item_type'] = 'season'
                         tab_info['current_series_info'] = all_seasons
                         tab_info['current_view'] = 'seasons'
                         self.update_series_view(tab_name)
                 else:
-                    all_episodes = []
-                    page_number = 0
-
-                    episodes_url = (
-                        f"{url}/portal.php?type=series&action=get_ordered_list"
-                        f"&movie_id={series_id}"
-                        f"&season_id={season_number}&episode_id=0"
-                        f"&JsHttpRequest=1-xml&p={page_number}"
-                    )
-
-                    response = session.get(episodes_url, cookies=cookies, headers=headers)
-                    response.raise_for_status()
-
-                    response_json = response.json()
-                    response_js = response_json.get("js", {})
-                    episodes = response_js.get("data", [])
-                    total_items = response_js.get("total_items", 0)
-                    max_page_items = response_js.get("max_page_items", 0)
-
-                    all_episodes.extend(episodes)
-
-                    if max_page_items:
-                        total_pages = (total_items + max_page_items - 1) // max_page_items
-                    else:
-                        logging.error("max_page_items is zero or undefined.")
+                    series_list = context_data.get("series", [])
+                    if not series_list:
+                        logging.info("No episodes found in this season.")
                         return
 
-                    for i in range(1, total_pages):
-                        page_number = i
-                        episodes_url = (
-                            f"{url}/portal.php?type=series&action=get_ordered_list"
-                            f"&movie_id={series_id}"
-                            f"&season_id={season_number}&episode_id=0"
-                            f"&JsHttpRequest=1-xml&p={page_number}"
-                        )
-
-                        response = session.get(episodes_url, cookies=cookies, headers=headers)
-                        response.raise_for_status()
-
-                        response_json = response.json()
-                        response_js = response_json.get("js", {})
-                        episodes = response_js.get("data", [])
-
-                        all_episodes.extend(episodes)
+                    logging.debug(f"Series episodes found: {series_list}")
+                    all_episodes = []
+                    for episode_number in series_list:
+                        episode = {
+                            'id': f"{series_id}:{episode_number}",
+                            'series_id': series_id,
+                            'season_number': season_number,
+                            'episode_number': episode_number,
+                            'name': f"Episode {episode_number}",
+                            'item_type': 'episode',
+                            'cmd': context_data.get("cmd")
+                        }
+                        logging.debug(f"Episode details: {episode}")
+                        all_episodes.append(episode)
 
                     if all_episodes:
-                        for episode in all_episodes:
-                            episode_id = episode.get("id")
-                            if not episode_id:
-                                logging.error(f"Episode ID missing in episode data: {episode}")
-                                continue
-
-                            episode['series_id'] = series_id
-                            episode['season_number'] = season_number
-                            episode['episode_id'] = episode_id
-                            episode['episode_number'] = episode.get("episode_number", "Unknown")
-                            episode['item_type'] = 'episode'
-
                         tab_info['current_series_info'] = all_episodes
                         tab_info['current_view'] = 'episodes'
+                        tab_info['episodes_loaded'] = True
                         self.update_series_view(tab_name)
-
+                    else:
+                        logging.info("No episodes found.")
             else:
                 logging.error("Failed to retrieve token.")
         except KeyError as e:
             logging.error(f"KeyError retrieving series info: {str(e)}")
         except Exception as e:
             logging.error(f"Error retrieving series info: {str(e)}")
-
-    def update_series_view(self, tab_name):
-        tab_info = self.tabs[tab_name]
-        playlist_model = tab_info['playlist_model']
-        playlist_model.clear()
-
-        if tab_info['navigation_stack']:
-            go_back_item = QStandardItem("Go Back")
-            playlist_model.appendRow(go_back_item)
-
-        for item in tab_info['current_series_info']:
-            item_type = item.get('item_type')
-            if item_type == 'season':
-                name = f"Season {item['season_number']}"
-            elif item_type == 'episode':
-                name = f"Episode {item['episode_number']}: {item.get('name', '')}"
-            else:
-                name = item.get('name') or item.get('title')
-            list_item = QStandardItem(name)
-            list_item.setData(item, QtCore.Qt.UserRole)
-            list_item.setData(item_type, QtCore.Qt.UserRole + 1)
-            playlist_model.appendRow(list_item)
 
     def play_channel(self, channel):
         cmd = channel.get("cmd")
@@ -726,17 +624,12 @@ class MainWindow(QMainWindow):
                     if token:
                         cmd_encoded = quote(cmd)
                         cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-                        headers = {
-                            "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                            "Authorization": "Bearer " + token,
-                        }
-                        create_link_url = (
-                            f"{url}/portal.php?type=itv&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
-                        )
+                        headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": f"Bearer {token}"}
+                        create_link_url = f"{url}/portal.php?type=itv&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
+                        logging.debug(f"Create link URL: {create_link_url}")
                         response = session.get(create_link_url, cookies=cookies, headers=headers)
                         response.raise_for_status()
                         json_response = response.json()
-
                         logging.debug(f"Create link response: {json_response}")
                         cmd_value = json_response.get("js", {}).get("cmd")
                         if cmd_value:
@@ -762,22 +655,19 @@ class MainWindow(QMainWindow):
                 if token:
                     cmd_encoded = quote(cmd)
                     cookies = {"mac": mac_address, "stb_lang": "en", "timezone": "Europe/London"}
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)",
-                        "Authorization": "Bearer " + token,
-                    }
+                    headers = {"User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C)", "Authorization": f"Bearer {token}"}
                     if item_type == 'episode':
-                        create_link_url = (
-                            f"{url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&series=1&JsHttpRequest=1-xml"
-                        )
+                        episode_number = channel.get('episode_number')
+                        if episode_number is None:
+                            logging.error("Episode number is missing.")
+                            return
+                        create_link_url = f"{url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&series={episode_number}&JsHttpRequest=1-xml"
                     else:
-                        create_link_url = (
-                            f"{url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
-                        )
+                        create_link_url = f"{url}/portal.php?type=vod&action=create_link&cmd={cmd_encoded}&JsHttpRequest=1-xml"
+                    logging.debug(f"Create link URL: {create_link_url}")
                     response = session.get(create_link_url, cookies=cookies, headers=headers)
                     response.raise_for_status()
                     json_response = response.json()
-
                     logging.debug(f"Create link response: {json_response}")
                     cmd_value = json_response.get("js", {}).get("cmd")
                     if cmd_value:
@@ -791,10 +681,33 @@ class MainWindow(QMainWindow):
                     logging.error("Failed to retrieve token.")
             except Exception as e:
                 logging.error(f"Error creating stream link: {e}")
+        else:
+            logging.error(f"Unknown item type: {item_type}")
+
+    def update_series_view(self, tab_name):
+        tab_info = self.tabs[tab_name]
+        playlist_model = tab_info['playlist_model']
+        playlist_model.clear()
+
+        if tab_info['navigation_stack']:
+            go_back_item = QStandardItem("Go Back")
+            playlist_model.appendRow(go_back_item)
+
+        for item in tab_info['current_series_info']:
+            item_type = item.get('item_type')
+            if item_type == 'season':
+                name = f"Season {item['season_number']}"
+            elif item_type == 'episode':
+                name = f"Episode {item['episode_number']}"
+            else:
+                name = item.get('name') or item.get('title')
+            list_item = QStandardItem(name)
+            list_item.setData(item, QtCore.Qt.UserRole)
+            list_item.setData(item_type, QtCore.Qt.UserRole + 1)
+            playlist_model.appendRow(list_item)
 
     def launch_media_player(self, stream_url):
         media_player = self.settings.value("media_player", "")
-
         if media_player:
             try:
                 subprocess.Popen([media_player, stream_url])
