@@ -1,4 +1,4 @@
-MAC-Based IPTV Player for Windows ---> Please contribute to this project so we can complete it. 
+MAC-Based IPTV Player for Windows ---> Please contribute to this project 
 
 This is an open-source MAC-Based IPTV Player application designed to stream channels, video-on-demand (VOD), and series from MAC-Based IPTV portals on Windows machines. The player is currently under development and requires contributions to complete.
 
@@ -16,9 +16,12 @@ Python 3.x installed on your system.
 VLC Media Player installed on your machine
 
 
-Please contribute to this project so we can complete it. 
+example 
+
+portal url: http://server.sstv.one/c/
+Mac: 00:1a:79:a2:9c:92
 
 
 
 
-![Screenshot 2024-04-11 094621](https://github.com/Cyogenus/IPTV-MAC-STALKER-PLAYER/assets/80471318/f3efdbb0-9057-474d-908a-dc23a7108e0a)
+![Screenshot 2024-10-18 040404](https://github.com/user-attachments/assets/6039a9bd-ae54-4b7c-89ad-e20cad512bf8)
