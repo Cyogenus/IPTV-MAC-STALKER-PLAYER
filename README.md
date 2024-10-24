@@ -21,7 +21,8 @@ Make sure to adjust the versions as needed for your project or environment. Most
 example 
 
 portal url: http://server.sstv.one/c/
-Mac:00:1a:79:a2:9c:92
+
+Mac: 00:1a:79:a2:9c:92
 
 
 
