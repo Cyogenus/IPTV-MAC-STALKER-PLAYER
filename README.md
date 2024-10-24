@@ -16,10 +16,12 @@ Python 3.x installed on your system.
 VLC Media Player installed on your machine
 
 
+Make sure to adjust the versions as needed for your project or environment. Most of these packages (e.g., sys, logging, re, traceback, subprocess) are part of Python's standard library, so you typically won't need to install them separately. You can use pip install -r requirements.txt to install these dependencies.
+
 example 
 
 portal url: http://server.sstv.one/c/
-Mac: 00:1a:79:a2:9c:92
+Mac:00:1a:79:a2:9c:92
 
 
 
