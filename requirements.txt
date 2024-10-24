@@ -1,0 +1,7 @@
+PyQt5==5.15.7
+requests==2.31.0
+logging
+re
+traceback
+sys
+subprocess
