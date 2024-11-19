@@ -1,6 +1,6 @@
-MAC-Based IPTV Player for Windows ---> Please contribute to this project 
+MAC-Portal IPTV Player for Windows ---> The best open source python mac portal player on github.
 
-This is an open-source MAC-Based IPTV Player application designed to stream channels, video-on-demand (VOD), and series from MAC-Based IPTV portals on Windows machines. The player is currently under development and requires contributions to complete.
+This is an open-source MAC-Based IPTV Player application designed to stream channels, video-on-demand (VOD), and series from MAC-Based IPTV portals on Windows machines. 
 
 Features
 MAC-Based IPTV Support: Access and stream content from MAC-Based IPTV portals.
