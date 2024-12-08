@@ -360,7 +360,7 @@ class RequestThread(QThread):
             )
             response.raise_for_status()
             response_json = response.json()
-            total_items = response_json.get("js", {}).get("total_items", 0)
+            total_items = int(response_json.get("js", {}).get("total_items", 0))
             items_per_page = len(response_json.get("js", {}).get("data", []))
             total_pages = (total_items + items_per_page - 1) // items_per_page
 
