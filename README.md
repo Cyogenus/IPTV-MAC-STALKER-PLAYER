@@ -1,3 +1,4 @@
+
 ### MAC-Portal IPTV Player by MY-1 for Windows
 
 - **Overview**: Best open-source Python MAC portal player on GitHub.
@@ -21,3 +22,5 @@
 #### Login Example
 - **Portal URL**: `http://server.sstv.one/c/`
 - **MAC Address**: `00:1a:79:a2:9c:92`
+
+- ![cachedImage](https://github.com/user-attachments/assets/5f3f57e9-e70b-4b22-8ccb-dfab878cf976)
