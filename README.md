@@ -1,30 +1,23 @@
-MAC-Portal IPTV Player for Windows ---> The best open source python mac portal player on github.
+### MAC-Portal IPTV Player by MY-1 for Windows
 
-This is an open-source MAC-Based IPTV Player application designed to stream channels, video-on-demand (VOD), and series from MAC-Based IPTV portals on Windows machines. 
+- **Overview**: Best open-source Python MAC portal player on GitHub.
+- **Purpose**: Streams channels, VOD, and series from MAC-Based IPTV portals on Windows.
 
-Features
-MAC-Based IPTV Support: Access and stream content from MAC-Based IPTV portals.
-Channel Streaming: Watch live channels provided by the IPTV service.
-VOD and Series Playback: Enjoy on-demand movies and TV series.
-VLC Player Integration: VLC Player is the preferred external media player for playback.
-Getting Started
-To contribute to this project, follow these steps:
+#### Features
+- **MAC-Based IPTV Support**: Stream content from MAC-Based IPTV portals.
+- **Channel Streaming**: Watch live channels.
+- **VOD and Series Playback**: Access on-demand movies and TV series.
+- **VLC Player Integration**: Uses VLC as the preferred media player. [Download VLC here](https://www.videolan.org/vlc/).
+- **Multithreading**: Enables fast playlist loading.
 
-Prerequisites
-Windows operating system.
-Python 3.x installed on your system.
-VLC Media Player installed on your machine
-
-
-Make sure to adjust the versions as needed for your project or environment. Most of these packages (e.g., sys, logging, re, traceback, subprocess) are part of Python's standard library, so you typically won't need to install them separately. You can use pip install -r requirements.txt to install these dependencies.
-
-example 
-
-portal url: http://server.sstv.one/c/
-
-Mac: 00:1a:79:a2:9c:92
+#### Getting Started
+- **Prerequisites**:
+  - Windows operating system
+  - Python 3.x
+  - VLC Media Player
+- **Dependencies**: Most packages are part of Python's standard library. Use `pip install -r requirements.txt` for additional dependencies.
 
 
-
-
-![Screenshot 2024-10-18 040404](https://github.com/user-attachments/assets/6039a9bd-ae54-4b7c-89ad-e20cad512bf8)
+#### Login Example
+- **Portal URL**: `http://server.sstv.one/c/`
+- **MAC Address**: `00:1a:79:a2:9c:92`
