@@ -9,7 +9,7 @@
 - **Channel Streaming**: Watch live channels.
 - **VOD and Series Playback**: Access on-demand movies and TV series.
 - **VLC Player Integration**: Uses VLC as the preferred media player. [Download VLC here](https://www.videolan.org/vlc/).
--  **SMPPlayer Integration**: Uses Smplayer as the preferred media player. [Download Smplayer here](https://www.smplayer.info).
+-  **SMPlayer Integration**: Uses Smplayer as the preferred media player. [Download Smplayer here](https://www.smplayer.info).
 - **Multithreading**: Enables fast playlist loading.
 
 #### Getting Started
