@@ -24,5 +24,6 @@
 - **Portal URL**: `http://server.sstv.one/c/`
 - **MAC Address**: `00:1a:79:a2:9c:92`
 
-![image](https://github.com/user-attachments/assets/60519e54-295c-4f68-8641-4f346e856a5e)
+![image](https://github.com/user-attachments/assets/f6218c10-f31e-4fc5-acba-dbde9d37e228)
+
 
