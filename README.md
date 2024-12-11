@@ -9,6 +9,7 @@
 - **Channel Streaming**: Watch live channels.
 - **VOD and Series Playback**: Access on-demand movies and TV series.
 - **VLC Player Integration**: Uses VLC as the preferred media player. [Download VLC here](https://www.videolan.org/vlc/).
+-  **SMPPlayer Integration**: Uses Smplayer as the preferred media player. [Download Smplayer here](https://www.smplayer.info).
 - **Multithreading**: Enables fast playlist loading.
 
 #### Getting Started
@@ -23,4 +24,5 @@
 - **Portal URL**: `http://server.sstv.one/c/`
 - **MAC Address**: `00:1a:79:a2:9c:92`
 
-- ![cachedImage](https://github.com/user-attachments/assets/5f3f57e9-e70b-4b22-8ccb-dfab878cf976)
+![image](https://github.com/user-attachments/assets/60519e54-295c-4f68-8641-4f346e856a5e)
+
