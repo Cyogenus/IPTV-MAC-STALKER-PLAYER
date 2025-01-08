@@ -25,7 +25,7 @@
 - **MAC Address**: `00:1a:79:a2:9c:92`
 
 - #### Stalker Login Example
-- **Portal URL**: 'http://someserver/stalker_portal/c/'
+- **Portal URL**: `http://someserver/stalker_portal/c/`
 - **MAC Address**: `00:1a:79:a2:9c:92`
 
 ![image](https://github.com/user-attachments/assets/a0b788b3-614c-49bd-9fab-583379aed0d8)
