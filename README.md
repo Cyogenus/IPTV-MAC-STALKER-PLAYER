@@ -1,3 +1,10 @@
+Support My Work
+
+Hi there! 👋 If you’ve found my projects helpful, consider [buying me a coffee](https://buymeacoffee.com/My11)☕️ to support ongoing development and keep everything free and open-source.
+
+Thank you for your support! 😊
+
+
 
 ### MAC-Portal IPTV Player by MY-1 for Windows
 
