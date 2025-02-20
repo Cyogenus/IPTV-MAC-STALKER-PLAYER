@@ -54,12 +54,12 @@ class StalkerPortal:
         serial: Optional[str] = None,
         stream_base_url: Optional[str] = None,
         device_id: Optional[str] = None,
-        timezone: Optional[str] = None,
+        timezone: Optional[str] = "Europe/Paris",  # Set default to Europe/Paris
         token_validity_period: int = 3600,  # Configurable token validity in seconds
-        retries: int = 3,                     # Configurable number of retries
-        backoff_factor: float = 1,           # Configurable backoff factor for retries
-        timeout: float = 10,                  # Configurable timeout for requests in seconds
-        num_threads: int = 10,                 # Number of threads for concurrent operations
+        retries: int = 1,                  # Configurable number of retries
+        backoff_factor: float = 1,         # Configurable backoff factor for retries
+        timeout: float = 10,               # Configurable timeout for requests in seconds
+        num_threads: int = 10,             # Number of threads for concurrent operations
         progress_callback: Optional[Callable[[int], None]] = None  # Callback for progress updates (0-100)
     ):
         """
@@ -168,8 +168,6 @@ class StalkerPortal:
     # GENERATION & VALIDATION
     # -------------------------------------------------------------------------
 
-  
-
     def generate_serial(self, mac: str) -> str:
         """
         Generate a 13-character serial based on the MD5 hash of the MAC address.
@@ -188,7 +186,6 @@ class StalkerPortal:
         
         logger.debug(f"Generated serial from MAC {mac}: {serial}")
         return serial
-
 
     def generate_device_id(self) -> str:
         """
@@ -265,7 +262,7 @@ class StalkerPortal:
         cookies = {
             "mac": quote(self.mac),
             "stb_lang": "en",
-            "timezone": quote(self.timezone.zone),
+            "timezone": quote("Europe/Paris"),  # Explicitly set timezone to Europe/Paris
         }
         if include_token and self.bearer_token:
             cookies["token"] = quote(self.bearer_token)
@@ -334,17 +331,23 @@ class StalkerPortal:
                 response.raise_for_status()
                 logger.debug(f"Received response: {response.status_code}")
                 return response
+            except requests.exceptions.HTTPError as http_err:
+                if response and response.status_code == 404:
+                    logger.warning(f"Received 404 Not Found for URL {url}.")
+                    # Specific handling for 404 can be done outside
+                    return response
+                logger.warning(f"Attempt {attempt} HTTP error for URL {url}: {http_err}")
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Attempt {attempt} failed for URL {url}: {e}")
-                if attempt < self.retries:
-                    sleep_time = self.backoff_factor * (2 ** (attempt - 1))
-                    logger.debug(f"Retrying after {sleep_time} seconds...")
-                    time.sleep(sleep_time)
-                else:
-                    logger.error(f"All {self.retries} attempts failed for URL {url}")
-                    if response is not None and hasattr(response, 'text'):
-                        logger.debug("Final response text: " + response.text)
-                    return None
+            if attempt < self.retries:
+                sleep_time = self.backoff_factor * (2 ** (attempt - 1))
+                logger.debug(f"Retrying after {sleep_time} seconds...")
+                time.sleep(sleep_time)
+            else:
+                logger.error(f"All {self.retries} attempts failed for URL {url}")
+                if response is not None and hasattr(response, 'text'):
+                    logger.debug("Final response text: " + response.text)
+                return None
 
     def safe_json_list(self, response: Optional[requests.Response], expected_key: str = "js") -> List[Dict]:
         """
@@ -380,11 +383,29 @@ class StalkerPortal:
     def handshake(self) -> None:
         """
         Initiates handshake to obtain a token from the server.
+        Handles 404 by generating a token and prehash, then retries handshake.
         """
-        url = f"{self.portal_url}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
+        initial_url = f"{self.portal_url}/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
         headers = self.generate_headers(include_auth=False)
-        logger.debug(f"Handshake - GET {url}")
-        response = self.make_request_with_retries(url, headers=headers)
+        logger.debug(f"Handshake - Initial GET {initial_url}")
+        
+        try:
+            response = self.session.get(initial_url, headers=headers, timeout=self.timeout)
+            if response.status_code == 404:
+                logger.warning("Initial handshake returned 404. Generating token and prehash for retry.")
+                token = self.generate_token()
+                prehash = self.generate_prehash(token)
+                retry_url = f"{self.portal_url}/stalker_portal/server/load.php?type=stb&action=handshake&token={token}&prehash={prehash}&JsHttpRequest=1-xml"
+                logger.debug(f"Retry handshake with URL: {retry_url}")
+                response = self.make_request_with_retries(retry_url, headers=headers)
+                if response is None:
+                    raise ConnectionError("Failed to perform handshake after retry with token and prehash.")
+            else:
+                response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Handshake request failed: {e}")
+            raise ConnectionError("Failed to perform handshake due to request exception.") from e
+
         json_response = self.safe_json_parse(response)
         if not json_response or "js" not in json_response:
             raise ConnectionError("Failed to perform handshake - invalid response.")
@@ -407,14 +428,44 @@ class StalkerPortal:
         self.bearer_token = self.token
         logger.debug(f"Handshake successful. Token: {self.token}, Random: {self.random}")
 
+    def generate_token(self) -> str:
+        """
+        Generate a random token string.
+
+        Returns:
+            str: Generated token.
+        """
+        token_length = 32  # Example length
+        token = ''.join(random.choices(string.ascii_uppercase + string.digits, k=token_length))
+        logger.debug(f"Generated token: {token}")
+        return token
+
+    def generate_prehash(self, token: str) -> str:
+        """
+        Generate a prehash based on the token.
+
+        Parameters:
+            token (str): The token string.
+
+        Returns:
+            str: Generated prehash.
+        """
+        # Example prehash generation using SHA1
+        hash_object = hashlib.sha1(token.encode())
+        prehash = hash_object.hexdigest()
+        logger.debug(f"Generated prehash from token: {prehash}")
+        return prehash
+
     def ensure_token(self) -> None:
         """
-        Check if token is valid. If not, re-handshake.
+        Check if token is valid. If not, re-handshake and update profile.
         """
         current_time = time.time()
         if self.token is None or (current_time - self.token_timestamp) > self.token_validity_period:
             logger.debug("Token expired or not present. Performing handshake to obtain new token.")
             self.handshake()
+            logger.debug("Token refreshed. Fetching profile.")
+            self.get_profile()  # Update profile after refreshing the token
         else:
             logger.debug("Existing token is still valid.")
 
@@ -1167,20 +1218,17 @@ class StalkerPortal:
         Returns:
             Optional[str]: Playable stream URL or None if not applicable.
         """
+        
         cmd = item.get("cmd")
         item_type = item.get("item_type", "")
-        protocol = item.get("protocol", "")
         is_series = item.get("is_series", "0")
 
         # If is_series = "1", user should navigate via seasons/episodes
         if is_series == "1":
-            logger.warning("Item is a series. Use get_seasons(), get_episodes(), and get_episode_stream_url(...).")
+            logger.warning("Item is a series. Use get_seasons(), get_episodes(), and get_episode_stream_link(...).")
             return None
 
-        if not cmd and item_type not in ["vod", "channel"]:
-            logger.error("Item must have 'cmd' for IPTV or 'movie_id' for VOD.")
-            return None
-
+        # For VOD or IPTV, we rely on either `movie_id` or `cmd`
         if item_type == "vod":
             # VOD approach
             movie_id = item.get("movie_id")
@@ -1214,34 +1262,44 @@ class StalkerPortal:
             js = json_response.get("js", {})
             url_link = js.get("url")
             cmd_value = js.get("cmd")
-            protocol_response = js.get("protocol", "")
 
             if url_link:
+                # If there's a direct 'url' field
                 stream_url = url_link
             elif cmd_value:
-                if protocol_response.lower() == "nfs":
-                    stream_url = f"{self.stream_base_url}/{cmd_value}"
-                else:
-                    stream_url = cmd_value
+                # If there's a 'cmd' field, handle "ffmpeg " prefix or direct URL
+                stream_url = cmd_value.strip()
+
+                # ---- FIX: Remove "ffmpeg" prefix if present ----
+                # e.g. "ffmpeg http://..." or "ffmpeghttp://..."
+                if re.match(r'(?i)^ffmpeg\s*(.*)', stream_url):
+                    logger.debug(f"Stripping 'ffmpeg' prefix from cmd: {stream_url}")
+                    stream_url = re.sub(r'(?i)^ffmpeg\s*', '', stream_url).strip()
+
+                # If still not an absolute URL, construct from stream_base_url
+                if not re.match(r'^https?://', stream_url, re.IGNORECASE):
+                    # In some portals, the cmd_value might already be a full URL.
+                    # But if it's not, we build it:
+                    stream_url = f"{self.stream_base_url}/{stream_url.lstrip('/')}"
+                    logger.debug(f"Constructed absolute URL by prepending stream_base_url: {stream_url}")
             else:
                 logger.error("Neither 'url' nor 'cmd' found in IPTV stream link response.")
                 logger.debug(f"Full 'js' response: {json.dumps(js, indent=2)}")
                 return None
 
+            # Final cleanup: validate & return
+            if isinstance(stream_url, str):
+                logger.debug(f"Final IPTV stream URL before validation: {stream_url}")
+            if self.validate_stream_url(stream_url):
+                logger.info(f"Successfully created IPTV stream link: {stream_url}")
+                return stream_url
+            else:
+                logger.error(f"Invalid stream URL generated: {stream_url}")
+                return None
+
         else:
             logger.error(f"Unhandled item_type: {item_type}")
             return None
-
-        # Strip 'ffmpeg ' prefix if present
-        if isinstance(stream_url, str) and stream_url.lower().startswith("ffmpeg "):
-            stream_url = stream_url[7:].strip()
-            logger.debug("Stripped 'ffmpeg ' prefix from cmd.")
-
-        if not self.validate_stream_url(stream_url):
-            logger.error(f"Invalid stream URL: {stream_url}")
-            return None
-
-        return stream_url
 
     def get_vod_stream_url(self, movie_id: str) -> Optional[str]:
         """
@@ -1341,30 +1399,35 @@ class StalkerPortal:
 
         js_data = json_response.get("js", {})
         stream_url = js_data.get("url")  # Attempt to get 'url' first
+        cmd_value = js_data.get("cmd")
 
         if not stream_url:
             # If 'url' is not present, attempt to use 'cmd'
-            cmd_value = js_data.get("cmd")
             if cmd_value:
-                # Check if 'cmd' is a full URL or a relative path
-                if cmd_value.startswith("http://") or cmd_value.startswith("https://"):
-                    stream_url = cmd_value
-                    logger.debug(f"'cmd' is a full URL: {stream_url}")
-                else:
-                    # Assume 'cmd' is a relative path; construct the full URL
-                    stream_url = f"{self.stream_base_url}/{cmd_value.lstrip('/')}"
-                    logger.debug(f"'cmd' is a relative path. Constructed stream_url: {stream_url}")
+                potential_url = cmd_value.strip()
+                # ---- FIX: Remove "ffmpeg" prefix if present ----
+                if re.match(r'(?i)^ffmpeg\s*(.*)', potential_url):
+                    logger.debug(f"Stripping 'ffmpeg' prefix from cmd: {potential_url}")
+                    potential_url = re.sub(r'(?i)^ffmpeg\s*', '', potential_url).strip()
+
+                # If not absolute, build from stream_base_url
+                if not re.match(r'^https?://', potential_url, re.IGNORECASE):
+                    potential_url = f"{self.stream_base_url}/{potential_url.lstrip('/')}"
+                    logger.debug(f"Constructed absolute URL: {potential_url}")
+
+                stream_url = potential_url
             else:
                 logger.error(f"No 'url' or 'cmd' found in create_link response for stream_id={stream_id}")
                 logger.debug(f"Full 'js' response: {json.dumps(js_data, indent=2)}")
                 raise StreamCreationError("Stream URL not found in the response.")
 
-        # Strip 'ffmpeg ' prefix if present
-        if isinstance(stream_url, str) and stream_url.lower().startswith("ffmpeg "):
+        # Final cleanup: remove leftover "ffmpeg " if any
+        if stream_url.lower().startswith("ffmpeg "):
+            logger.debug(f"Stripping unexpected 'ffmpeg ' prefix from stream_url: {stream_url}")
             stream_url = stream_url[7:].strip()
-            logger.debug(f"Stripped 'ffmpeg' prefix. New stream_url: {stream_url}")
 
         # Validate the stream URL
+        logger.debug(f"Final VOD stream URL before validation: {stream_url}")
         if self.validate_stream_url(stream_url):
             logger.info(f"Successfully created stream link: {stream_url}")
             return stream_url
@@ -1671,6 +1734,17 @@ class StalkerPortal:
 
         logger.debug(f"Generated stream URL: {cmd_url}")
 
+        # ---- FIX: Remove "ffmpeg" prefix if present ----
+        cmd_url = cmd_url.strip()
+        if re.match(r'(?i)^ffmpeg\s*(.*)', cmd_url):
+            logger.debug(f"Stripping 'ffmpeg' prefix from cmd: {cmd_url}")
+            cmd_url = re.sub(r'(?i)^ffmpeg\s*', '', cmd_url).strip()
+
+        # If not absolute, build from stream_base_url
+        if not re.match(r'^https?://', cmd_url, re.IGNORECASE):
+            cmd_url = f"{self.stream_base_url}/{cmd_url.lstrip('/')}"
+            logger.debug(f"Constructed absolute URL: {cmd_url}")
+
         # Validate the stream URL
         if self.validate_stream_url(cmd_url):
             return cmd_url
@@ -1679,23 +1753,12 @@ class StalkerPortal:
             return None
 
     # -------------------------------------------------------------------------
-    # STREAM URL VALIDATION
+    # STREAM LINK GENERATION END
     # -------------------------------------------------------------------------
-    # Note: validate_stream_url is already defined above.
-
-    # -------------------------------------------------------------------------
-    # IMPLEMENTATION OF select_movie_and_get_stream METHOD
-    # -------------------------------------------------------------------------
-    # This method is already defined above.
-
-    # -------------------------------------------------------------------------
-    # Additional Methods (e.g., get_seasons, get_episodes) can be added here
-    # as needed to support other functionalities.
 
 # -------------------------------------------------------------------------
 # EXAMPLE USAGE WITH LIVE PROGRESS BAR
 # -------------------------------------------------------------------------
-
 def main():
     # Initialize the tqdm progress bar
     progress_bar = tqdm(total=100, desc="Fetching Categories and Items", unit="%", ncols=100)
