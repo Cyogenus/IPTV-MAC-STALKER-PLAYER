@@ -5,6 +5,7 @@ import subprocess
 import logging
 import re
 import time
+import qdarkstyle
 import concurrent.futures  # Added for parallel execution
 from stalker import StalkerPortal
 from PyQt5.QtCore import (
@@ -12,10 +13,8 @@ from PyQt5.QtCore import (
     Qt,
     QThread,
     pyqtSignal,
-    QPropertyAnimation,
-    QEasingCurve,
+    QTimer,  # Changed from QPropertyAnimation
     QCoreApplication,
-    QTimer,
 )
 from PyQt5.QtWidgets import (
     QMessageBox,
@@ -43,9 +42,15 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Remove existing handlers
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
 
+# Reconfigure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Reintroduce get_token for non-stalker portals
 def get_token(session, url, mac_address):
@@ -61,7 +66,7 @@ def get_token(session, url, mac_address):
                           "AppleWebKit/533.3 (KHTML, like Gecko) "
                           "MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
         }
-        response = session.get(handshake_url, cookies=cookies, headers=headers, timeout=10)
+        response = session.get(handshake_url, cookies=cookies, headers=headers, timeout=15)
         response.raise_for_status()
         token = response.json().get("js", {}).get("token")
         if token:
@@ -120,6 +125,9 @@ class RequestThread(QThread):
                 "Authorization": f"Bearer {token}",
             }
 
+            # **Always Reset Progress to 0 at the Start**
+            self.update_progress.emit(0)  # Reset progress bar to 0%
+
             # Fetch profile and account info
             try:
                 profile_url = f"{url}/portal.php?type=stb&action=get_profile&JsHttpRequest=1-xml"
@@ -145,7 +153,6 @@ class RequestThread(QThread):
 
             if self.category_type and self.category_id:
                 # Fetch channels in a category
-                self.update_progress.emit(0)
                 logging.debug("Fetching channels.")
                 channels = self.get_channels(
                     session,
@@ -165,7 +172,6 @@ class RequestThread(QThread):
                 data = {}
                 total_categories = 3
                 completed_categories = 0
-                self.update_progress.emit(0)
 
                 fetch_methods = [
                     (self.get_genres, "Live"),
@@ -311,7 +317,7 @@ class RequestThread(QThread):
                                   else "vod" if category_type == "VOD"
                                   else "channel")
             channels.extend(channels_data)
-            self.update_progress.emit(int((1 / max(total_pages, 1)) * 100))
+            self.update_progress.emit(int((1 / max(total_pages, 1)) * 100))  # Initial progress
 
             # Fetch remaining pages in parallel
             pages_to_fetch = list(range(1, total_pages))
@@ -384,31 +390,61 @@ class StalkerRequestThread(QThread):
     def run(self):
         try:
             logging.debug("StalkerRequestThread started.")
-            self.stalker_update_progress.emit(0)
+            self.stalker_update_progress.emit(0)  # Reset progress at the start
 
             # Perform handshake and get profile
             self.portal.handshake()
             self.stalker_update_progress.emit(10)
+            logging.debug("Handshake completed.")
 
             self.portal.get_profile()
             self.stalker_update_progress.emit(20)
+            logging.debug("Profile fetched successfully.")
 
-            # Fetch categories
-            categories = {
-                "Live": self.portal.get_itv_categories(),
-                "Movies": self.portal.get_vod_categories(),
-                "Series": self.portal.get_series_categories(),
-            }
-            self.stalker_update_progress.emit(60)
+            # Fetch categories with incremental progress updates
+            categories = {}
+            total_steps = 3  # Number of category types
+            current_step = 0
+
+            try:
+                logging.debug("Fetching Live categories...")
+                categories["Live"] = self.portal.get_itv_categories()
+                current_step += 1
+                progress = 20 + int((current_step / total_steps) * 80)  # Between 20% and 100%
+                self.stalker_update_progress.emit(progress)
+                logging.debug(f"Fetched Live categories. Progress: {progress}%")
+            except Exception as e:
+                logging.error(f"Error fetching Live categories: {e}")
+
+            try:
+                logging.debug("Fetching Movies categories...")
+                categories["Movies"] = self.portal.get_vod_categories()
+                current_step += 1
+                progress = 20 + int((current_step / total_steps) * 80)  # Between 20% and 100%
+                self.stalker_update_progress.emit(progress)
+                logging.debug(f"Fetched Movies categories. Progress: {progress}%")
+            except Exception as e:
+                logging.error(f"Error fetching Movies categories: {e}")
+
+            try:
+                logging.debug("Fetching Series categories...")
+                categories["Series"] = self.portal.get_series_categories()
+                current_step += 1
+                progress = 20+ int((current_step / total_steps) * 80)  # Between 20% and 100%
+                self.stalker_update_progress.emit(progress)
+                logging.debug(f"Fetched Series categories. Progress: {progress}%")
+            except Exception as e:
+                logging.error(f"Error fetching Series categories: {e}")
 
             # Emit the fetched categories
             self.stalker_request_complete.emit(categories)
-            self.stalker_update_progress.emit(100)
+            self.stalker_update_progress.emit(100)  # Complete progress
+            logging.debug("All categories fetched successfully.")
 
         except Exception as e:
             logging.error(f"StalkerRequestThread encountered an error: {e}")
             self.stalker_error.emit(str(e))
-            self.stalker_update_progress.emit(0)
+            self.stalker_update_progress.emit(0)  # Reset progress on error
 
 
 class ProfileDialog(QDialog):
@@ -448,11 +484,6 @@ class ProfileDialog(QDialog):
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)  # Initially hidden
         layout.addWidget(self.progress_bar)
-
-        # Initialize the progress bar animation
-        self.progress_animation = QPropertyAnimation(self.progress_bar, b"value")
-        self.progress_animation.setDuration(500)  # Duration in milliseconds
-        self.progress_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
     def load_profile_list(self):
         self.profile_list.clear()
@@ -531,7 +562,7 @@ class ProfileDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAC IPTV Player by MY-1 v3.0")
+        self.setWindowTitle("MAC IPTV Player by MY-1 v3.5")
         self.setGeometry(100, 100, 550, 560)
 
         self.settings = QSettings("MyCompany", "IPTVPlayer")
@@ -615,7 +646,6 @@ class MainWindow(QMainWindow):
         # Connect the search input to the search functionality
         self.search_input.textChanged.connect(self.perform_search)
 
-
         self.tab_widget = QTabWidget()
         layout.addWidget(self.tab_widget)
 
@@ -644,6 +674,7 @@ class MainWindow(QMainWindow):
                 "current_view": "categories",
             }
 
+        # **Rework Progress Bar to Use QTimer for Smooth Progression**
         self.progress_bar = QProgressBar()
         self.progress_bar.setStyleSheet(
             "QProgressBar {text-align: center; color: white;} QProgressBar::chunk {background-color: purple;}"
@@ -652,10 +683,17 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)  # Initially hidden
         layout.addWidget(self.progress_bar)
 
-        self.progress_animation = QPropertyAnimation(self.progress_bar, b"value")
-        # Remove the fixed duration
-        # self.progress_animation.setDuration(200)  # Duration in milliseconds
-        self.progress_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        # Initialize QTimer for progress updates
+        self.progress_timer = QTimer()
+        self.progress_timer.timeout.connect(self.update_progress_bar)
+        self.progress_target = 100  # Target progress value
+        self.progress_step = 1  # Increased progress increment step for faster updates
+
+        # Initialize a separate timer for non-Stalker progress
+        self.non_stalker_progress_timer = QTimer()
+        self.non_stalker_progress_timer.timeout.connect(self.update_non_stalker_progress_bar)
+        self.non_stalker_progress_target = 100
+        self.non_stalker_progress_step = 1
 
         self.session = None
         self.token = None
@@ -663,10 +701,24 @@ class MainWindow(QMainWindow):
         self.current_request_thread = None
         self.current_stalker_thread = None
 
+        # Add a layout for bottom controls
+        bottom_layout = QHBoxLayout()
+        layout.addLayout(bottom_layout)
+
+        # Add the "Always on Top" checkbox
         self.always_on_top_checkbox = QCheckBox("Always on Top")
-        layout.addWidget(self.always_on_top_checkbox)
+        bottom_layout.addWidget(self.always_on_top_checkbox)
         self.always_on_top_checkbox.stateChanged.connect(self.toggle_always_on_top)
 
+        # Add the "Enable Dark Theme" checkbox
+        self.dark_theme_checkbox = QCheckBox("Enable Dark Theme")
+        bottom_layout.addWidget(self.dark_theme_checkbox)
+        self.dark_theme_checkbox.stateChanged.connect(self.toggle_dark_theme)
+
+        # Align the bottom controls to the right
+        bottom_layout.addStretch()
+
+        # Load saved settings
         self.load_settings()
         always_on_top = self.settings.value("always_on_top", False, type=bool)
         self.always_on_top_checkbox.setChecked(always_on_top)
@@ -674,17 +726,34 @@ class MainWindow(QMainWindow):
             self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
             self.show()
 
-        self.portal = None  # For StalkerPortal if needed
+        # Load dark theme setting
+        is_dark_theme = self.settings.value("dark_theme", False, type=bool)
+        self.dark_theme_checkbox.setChecked(is_dark_theme)
+        if is_dark_theme:
+            self.apply_dark_theme()
+        else:
+            self.apply_light_theme()
 
-        # **Connect Tab Change to Reapply Search**
-        self.tab_widget.currentChanged.connect(lambda: self.perform_search(self.search_input.text()))
+    def toggle_dark_theme(self, state):
+        if state == Qt.Checked:
+            self.apply_dark_theme()
+            self.settings.setValue("dark_theme", True)
+        else:
+            self.apply_light_theme()
+            self.settings.setValue("dark_theme", False)
+
+    def apply_dark_theme(self):
+        self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+
+    def apply_light_theme(self):
+        self.setStyleSheet("")  # Reset to default light theme
 
     def get_icon_for_item(self, item_type):
         style = QApplication.style()
         if item_type == "category":
             return style.standardIcon(QStyle.SP_DirIcon)
         elif item_type == "channel":
-            return style.standardIcon(QStyle.SP_MediaPlay)
+            return style.standardIcon(QStyle.SP_ComputerIcon)
         elif item_type == "vod":
             return style.standardIcon(QStyle.SP_FileIcon)
         elif item_type == "series":
@@ -698,49 +767,72 @@ class MainWindow(QMainWindow):
         else:
             return QIcon()
 
-    def handle_stalker_progress(self, progress: int) -> None:
-        """
-        Centralized handler for updating the progress bar.
+    def handle_stalker_progress(self, progress: int):
+        logging.debug(f"Progress update received: {progress}%")
+        if progress >= 0:
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(progress)
+            self.progress_bar.repaint()
 
-        - Shows the progress bar when progress is between 0 and 100.
-        - Hides the progress bar when progress reaches 100 or is reset to 0.
-        - Updates the progress bar smoothly as progress increases.
-        - Ensures thread-safe updates by scheduling the update in the main GUI thread.
-
-        Args:
-            progress (int): The current progress percentage (0-100).
+    def handle_non_stalker_progress(self, progress: int) -> None:
         """
-        def update_progress():
-            if 0 < progress < 100:
-                if not self.progress_bar.isVisible():
-                    self.progress_bar.setVisible(True)
-                # Animate the progress bar to the new value
-                if self.progress_animation.state() == QPropertyAnimation.Running:
-                    self.progress_animation.stop()
-                start_val = self.progress_bar.value()
-                end_val = progress
-                delta = abs(end_val - start_val)
-                duration = min(max(200, delta * 5), 1000)  # duration between 200ms and 1000ms
-                self.progress_animation.setDuration(duration)
-                self.progress_animation.setStartValue(start_val)
-                self.progress_animation.setEndValue(end_val)
-                self.progress_animation.start()
-                logging.debug(f"Animating progress bar from {start_val}% to {end_val}% with duration {duration}ms.")
-            elif progress == 100:
-                # Finalize the progress and hide the progress bar
-                self.progress_animation.stop()
+        Handler for updating the progress bar for non-Stalker-related operations.
+
+        - Sets the target progress value.
+        - Starts the separate QTimer if not already running.
+        - Ensures the progress bar only moves forward.
+        """
+        if progress > self.non_stalker_progress_target:
+            self.non_stalker_progress_target = progress
+            if not self.progress_bar.isVisible():
+                self.progress_bar.setVisible(True)
+            if not self.non_stalker_progress_timer.isActive():
+                self.non_stalker_progress_timer.start(5)  # Update every 5 ms
+        elif progress == 0:
+            self.non_stalker_progress_target = 0
+            self.progress_bar.setValue(0)
+            self.progress_bar.setVisible(False)
+            self.non_stalker_progress_timer.stop()
+
+    def update_progress_bar(self):
+        """
+        Slot connected to QTimer to incrementally update the progress bar towards the target for Stalker.
+        """
+        if self.progress_bar.value() < self.progress_target:
+            # Increase progress bar value faster by using a larger step
+            self.progress_bar.setValue(self.progress_bar.value() + self.progress_step)
+            # Ensure it does not exceed the target
+            if self.progress_bar.value() > self.progress_target:
+                self.progress_bar.setValue(self.progress_target)
+        else:
+            self.progress_timer.stop()
+            if self.progress_bar.value() >= 100:
+                # Ensure it's set to 100
                 self.progress_bar.setValue(100)
+                # Hide the progress bar after reaching 100%
                 QTimer.singleShot(500, lambda: self.progress_bar.setVisible(False))
-                logging.debug("Progress bar reached 100% and is now hidden.")
-            elif progress == 0:
-                # Reset the progress bar to 0% and hide it
-                self.progress_animation.stop()
-                self.progress_bar.setValue(0)
-                self.progress_bar.setVisible(False)
-                logging.debug("Progress bar reset to 0% and is now hidden.")
+                # Optionally, perform additional actions here if needed
+                logging.debug("Progress bar reached 100% (Stalker).")
 
-        # Schedule the update in the main GUI thread
-        QTimer.singleShot(0, update_progress)
+    def update_non_stalker_progress_bar(self):
+        """
+        Slot connected to QTimer to incrementally update the progress bar towards the target for non-Stalker.
+        """
+        if self.progress_bar.value() < self.non_stalker_progress_target:
+            # Increase progress bar value faster by using a larger step
+            self.progress_bar.setValue(self.progress_bar.value() + self.non_stalker_progress_step)
+            # Ensure it does not exceed the target
+            if self.progress_bar.value() > self.non_stalker_progress_target:
+                self.progress_bar.setValue(self.non_stalker_progress_target)
+        else:
+            self.non_stalker_progress_timer.stop()
+            if self.progress_bar.value() >= 100:
+                # Ensure it's set to 100
+                self.progress_bar.setValue(100)
+                # Hide the progress bar after reaching 100%
+                QTimer.singleShot(500, lambda: self.progress_bar.setVisible(False))
+                # Optionally, perform additional actions here if needed
+                logging.debug("Progress bar reached 100% (Non-Stalker).")
 
     def load_profiles(self):
         self.profiles = self.settings.value("profiles", [])
@@ -813,13 +905,9 @@ class MainWindow(QMainWindow):
                 self.settings.setValue("media_player", media_player)
                 logging.debug(f"Media player selected: {media_player}")
 
-    def set_progress(self, value):
-        self.handle_stalker_progress(value)
-
     def get_playlist(self):
-        # Initialize progress to 0%
-        self.handle_stalker_progress(0)
-
+        # **Always Reset Progress to 0 at the Start of Playlist Fetch**
+        # Determine which progress handler to reset based on the type of request
         hostname_input = self.hostname_input.text().strip()
         mac_address = self.mac_input.text().strip()
         media_player = self.media_player_input.text().strip()
@@ -852,7 +940,7 @@ class MainWindow(QMainWindow):
                 # Initialize and start the StalkerRequestThread
                 self.stalker_thread = StalkerRequestThread(self.portal)
                 self.stalker_thread.stalker_request_complete.connect(self.on_stalker_playlist_received)
-                self.stalker_thread.stalker_update_progress.connect(self.set_progress)
+                self.stalker_thread.stalker_update_progress.connect(self.handle_stalker_progress)
                 self.stalker_thread.stalker_error.connect(self.on_stalker_error)
                 self.stalker_thread.start()
                 self.current_stalker_thread = self.stalker_thread
@@ -875,11 +963,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", "A playlist request is already in progress.")
                 return
 
+            # **Reset non-Stalker progress at the start**
+            self.handle_non_stalker_progress(0)
+
             self.request_thread = RequestThread(
                 self.base_url, mac_address, self.session, self.token, num_threads=num_threads,
             )
             self.request_thread.request_complete.connect(self.on_initial_playlist_received)
-            self.request_thread.update_progress.connect(self.set_progress)
+            self.request_thread.update_progress.connect(self.handle_non_stalker_progress)
             self.request_thread.start()
             self.current_request_thread = self.request_thread
             logging.debug("Started RequestThread for playlist (non-stalker).")
@@ -925,7 +1016,7 @@ class MainWindow(QMainWindow):
         if not data:
             self.show_error_message("Failed to retrieve playlist data. Check connection.")
             logging.error("Playlist data empty.")
-            self.handle_stalker_progress(0)  # Reset progress on error
+            self.handle_non_stalker_progress(0)  # Reset progress on error
             self.current_request_thread = None
             return
         for tab_name, tab_data in data.items():
@@ -939,7 +1030,7 @@ class MainWindow(QMainWindow):
             tab_info["navigation_stack"] = []
             self.update_playlist_view(tab_name)
         logging.debug("Playlist data loaded into tabs.")
-        self.handle_stalker_progress(100)  # Finalize progress
+        self.handle_non_stalker_progress(100)  # Finalize progress
         self.current_request_thread = None
 
     def update_playlist_view(self, tab_name, scroll_position=0):
@@ -1042,8 +1133,17 @@ class MainWindow(QMainWindow):
         category_type = category["category_type"]
         category_id = category.get("category_id")
 
-        # Decide logic based on portal type:
+        # **Always Reset Progress to 0 Before Starting Channel Fetch**
+        # Decide which progress handler to reset based on the portal type
         hostname_input = self.hostname_input.text().strip()
+        if "/stalker_portal/" in hostname_input and self.portal:
+            # StalkerPortal logic
+            self.handle_stalker_progress(0)
+        else:
+            # Non-Stalker logic
+            self.handle_non_stalker_progress(0)
+
+        # Decide logic based on portal type:
         if "/stalker_portal/" in hostname_input and self.portal:
             # StalkerPortal logic
             channels = []
@@ -1059,14 +1159,16 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logging.error(f"Error retrieving channels from StalkerPortal: {e}")
                 self.show_error_message(f"Error retrieving channels: {e}")
-                self.handle_stalker_progress(0)
+                # Reset progress
+                if category_type in ["IPTV", "VOD", "Series"]:
+                    self.handle_stalker_progress(0)
                 return
 
             tab_info["current_channels"] = channels
             self.update_channel_view(tab_name, scroll_position)
             self.handle_stalker_progress(100)  # Finalize progress after channel retrieval
         else:
-            # Non-stalker logic: Use RequestThread for channels
+            # Non-Stalker logic: Use RequestThread for channels
             if (self.current_request_thread is not None and self.current_request_thread.isRunning()):
                 QMessageBox.warning(self, "Warning", "A channel request is already in progress.")
                 return
@@ -1083,7 +1185,7 @@ class MainWindow(QMainWindow):
             self.request_thread = RequestThread(
                 self.base_url, self.mac_address, self.session, self.token, category_type, category_id, num_threads=num_threads
             )
-            self.request_thread.update_progress.connect(self.set_progress)
+            self.request_thread.update_progress.connect(self.handle_non_stalker_progress)
             self.request_thread.channels_loaded.connect(
                 lambda channels: self.on_channels_loaded(tab_name, channels)
             )
@@ -1099,7 +1201,7 @@ class MainWindow(QMainWindow):
         tab_info["current_channels"] = channels
         self.update_channel_view(tab_name)
         logging.debug(f"Channels loaded for {tab_name}: {len(channels)}")
-        self.handle_stalker_progress(100)  # Finalize progress
+        self.handle_non_stalker_progress(100)  # Finalize progress
         self.current_request_thread = None
 
     def update_channel_view(self, tab_name, scroll_position=0):
@@ -1172,8 +1274,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Info", "No previous view to go back to.")
             return
 
-        # Reset and start the progress bar for a new operation
-        self.handle_stalker_progress(0)  # Reset progress to 0%
+        # **Always Reset Progress to 0 Before Starting a New Operation**
+        # Determine which progress handler to reset based on the portal type
+        hostname_input = self.hostname_input.text().strip()
+        if "/stalker_portal/" in hostname_input and self.portal:
+            self.handle_stalker_progress(0)
+        else:
+            self.handle_non_stalker_progress(0)
 
         # Store the current scroll position
         current_scroll_position = playlist_view.verticalScrollBar().value()
@@ -1191,7 +1298,8 @@ class MainWindow(QMainWindow):
             tab_info["current_category"] = item_data
             logging.debug(f"Navigating to category: {item_data.get('name')}")
             self.retrieve_channels(current_tab, tab_info["current_category"])
-            self.handle_stalker_progress(100)  # Finalize progress after initiating channel retrieval
+            # **Progress will be handled by the thread**
+
         elif item_type == "series":
             tab_info["navigation_stack"].append(
                 {
@@ -1213,7 +1321,8 @@ class MainWindow(QMainWindow):
                 logging.debug(f"Using generic logic for series: {item_data.get('name')}")
                 self.retrieve_series_info(current_tab, item_data)
 
-            self.handle_stalker_progress(100)  # Finalize progress after initiating series info retrieval
+            # **Progress will be handled by the thread**
+
         elif item_type == "season":
             tab_info["navigation_stack"].append(
                 {
@@ -1233,7 +1342,8 @@ class MainWindow(QMainWindow):
             logging.debug(f"Fetching episodes for season: {season_number}")
             self.stalker_retrieve_series_info(current_tab, item_data, season_number=season_number)
 
-            self.handle_stalker_progress(100)  # Finalize progress after initiating episode retrieval
+            # **Progress will be handled by the thread**
+
         elif item_type == "episode":
             logging.debug(f"Playing episode: {item_data.get('name')}")
             self.play_channel(item_data)
@@ -1307,7 +1417,10 @@ class MainWindow(QMainWindow):
                         if not seasons_data:
                             break
                         for season in seasons_data:
-                            season_id = season.get("id", "")
+                            # Ensure season_id is a string
+                            season_id_raw = season.get("id", "")
+                            season_id = str(season_id_raw)
+                            logging.debug(f"Processing season_id: {season_id_raw} (type: {type(season_id_raw)}) converted to string: {season_id}")
                             season_number_extracted = None
                             if season_id.startswith("season"):
                                 match = re.match(r"season(\d+)", season_id)
@@ -1382,7 +1495,7 @@ class MainWindow(QMainWindow):
                     all_episodes.append(episode)
 
                 if all_episodes:
-                    # Sort episodes by episode_number
+                    # Sort episodes by episode_number in ascending order
                     all_episodes.sort(key=lambda x: x.get('episode_number', 0))
                     tab_info["current_series_info"] = all_episodes
                     tab_info["current_view"] = "episodes"
@@ -1530,7 +1643,9 @@ class MainWindow(QMainWindow):
                                 if season_id.startswith("season"):
                                     match = re.match(r"season(\d+)", season_id)
                                     if match:
-                                        season_number_extracted = int(match.group(1))
+                                        season_number_extracted = int(
+                                            match.group(1)
+                                        )
                                     else:
                                         logging.error(
                                             f"Unexpected season id format: {season_id}"
@@ -1643,7 +1758,6 @@ class MainWindow(QMainWindow):
         logging.debug(f"Episodes after sorting: {episodes}")
 
         return episodes
-
 
     def is_token_valid(self):
         # Assuming token is valid for 10 minutes
@@ -1762,8 +1876,8 @@ class MainWindow(QMainWindow):
                     logging.debug(f"Create link response: {json_response}")
                     cmd_value = json_response.get("js", {}).get("cmd")
                     if cmd_value:
-                        if cmd_value.startswith("ffmpeg "):
-                            cmd_value = cmd_value[len("ffmpeg "):]
+                        if cmd.lower().startswith("ffmpeg"):
+                            cmd = cmd[6:].strip()
                         stream_url = cmd_value
                         self.launch_media_player(stream_url)
                     else:
@@ -1841,8 +1955,9 @@ class MainWindow(QMainWindow):
                 logging.debug(f"Create link response: {json_response}")
                 cmd_value = json_response.get("js", {}).get("cmd")
                 if cmd_value:
+                    # Remove the first word (e.g., 'ffmpeg') and join the rest
                     cmd_value = ' '.join(cmd_value.split(' ')[1:])
-                        
+
                     stream_url = cmd_value
                     self.launch_media_player(stream_url)
                 else:
@@ -1891,12 +2006,31 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: playlist_view.verticalScrollBar().setValue(scroll_position))
 
     def launch_media_player(self, stream_url):
-        media_player = self.settings.value("media_player", "")
+        # List of known prefixes to strip
+        known_prefixes = ["ffmpeg ", "ffrt3 "]  # Add any other prefixes here
+
+        # Strip any known prefix
+        original_url = stream_url
+        stream_url = stream_url.strip()  # Remove extra spaces
+        for prefix in known_prefixes:
+            if stream_url.lower().startswith(prefix.lower()):
+                stream_url = stream_url[len(prefix):].strip()
+                logging.debug(f"Removed prefix '{prefix}' from stream_url. New URL: {stream_url}")
+
+        # Log the final URL
+        logging.debug(f"Launching media player with cleaned URL: {stream_url}")
+
+        # Retrieve media player executable path
+        media_player = self.settings.value("media_player", "")  # Ensure VLC is set here
         if media_player:
             try:
-                subprocess.Popen([media_player, stream_url])
-                logging.debug(f"Launching media player with URL: {stream_url}")
-                self.handle_stalker_progress(100)  # Finalize progress after playback
+                # Define the VLC user-agent parameter
+                user_agent = "Lavf53.32.100"  # Customize this if needed
+                vlc_command = [media_player, stream_url, f":http-user-agent={user_agent}"]
+
+                # Launch the media player with the cleaned URL and user-agent
+                subprocess.Popen(vlc_command)
+                logging.debug(f"Successfully launched media player with URL: {stream_url} and User-Agent: {user_agent}")
             except Exception as e:
                 logging.error(f"Error opening media player: {e}")
                 QMessageBox.critical(
@@ -1913,6 +2047,8 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         pass
 
+    # Additional Methods (as per the original code)
+    # Ensure to implement any missing methods or fix incomplete code blocks
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
