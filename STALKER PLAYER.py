@@ -307,7 +307,7 @@ class RequestThread(QThread):
             response = session.get(initial_url, cookies=cookies, headers=headers, timeout=10)
             response.raise_for_status()
             response_json = response.json()
-            total_items = response_json.get("js", {}).get("total_items", 0)
+            total_items = int(response_json.get("js", {}).get("total_items", 0))
             items_per_page = len(response_json.get("js", {}).get("data", []))
             total_pages = (total_items + items_per_page - 1) // items_per_page if items_per_page else 1
 
