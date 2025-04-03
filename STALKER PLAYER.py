@@ -8,6 +8,7 @@ import time
 import qdarkstyle
 import concurrent.futures  # Added for parallel execution
 from stalker import StalkerPortal
+import vlc
 from PyQt5.QtCore import (
     QSettings,
     Qt,
@@ -38,6 +39,8 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QDialog,
     QStyle,
+    QFrame,
+    QStackedWidget,
 )
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
@@ -569,18 +572,23 @@ class MainWindow(QMainWindow):
         self.profiles = []
         self.load_profiles()
 
-        central_widget = QWidget(self)
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        self.stack = QStackedWidget()
+        self.setCentralWidget(self.stack)
 
-        top_layout = QVBoxLayout()
-        layout.addLayout(top_layout)
+        # Create main UI view
+        self.main_widget = QWidget()
+        self.main_layout = QVBoxLayout(self.main_widget)
+        self.top_layout = QVBoxLayout()
+        self.main_layout.addLayout(self.top_layout)
+
+        self.stack.addWidget(self.main_widget)
+
 
         hostname_label = QLabel("Hostname:")
-        top_layout.addWidget(hostname_label)
+        self.top_layout.addWidget(hostname_label)
 
         hostname_layout = QHBoxLayout()
-        top_layout.addLayout(hostname_layout)
+        self.top_layout.addLayout(hostname_layout)
 
         self.hostname_input = QLineEdit()
         hostname_layout.addWidget(self.hostname_input)
@@ -592,23 +600,17 @@ class MainWindow(QMainWindow):
         self.profile_button.clicked.connect(self.open_profile_dialog)
 
         mac_label = QLabel("MAC:")
-        top_layout.addWidget(mac_label)
+        self.top_layout.addWidget(mac_label)
 
         self.mac_input = QLineEdit()
-        top_layout.addWidget(self.mac_input)
+        self.top_layout.addWidget(self.mac_input)
 
         media_player_layout = QHBoxLayout()
-        top_layout.addLayout(media_player_layout)
+        self.top_layout.addLayout(media_player_layout)
 
-        self.media_player_input = QLineEdit()
-        media_player_layout.addWidget(self.media_player_input)
-
-        self.choose_player_button = QPushButton("Choose Player")
-        media_player_layout.addWidget(self.choose_player_button)
-        self.choose_player_button.clicked.connect(self.open_file_dialog)
 
         threads_layout = QHBoxLayout()
-        top_layout.addLayout(threads_layout)
+        self.top_layout.addLayout(threads_layout)
 
         threads_label = QLabel("Threads:")
         threads_layout.addWidget(threads_label)
@@ -622,7 +624,7 @@ class MainWindow(QMainWindow):
         threads_layout.addStretch()
 
         self.get_playlist_button = QPushButton("Get Playlist")
-        layout.addWidget(self.get_playlist_button)
+        self.main_layout.addWidget(self.get_playlist_button)
         self.get_playlist_button.clicked.connect(self.get_playlist)
 
         # **Add Search Bar Above the Tabs with SP_FileDialogContentsView Icon inside**
@@ -641,13 +643,13 @@ class MainWindow(QMainWindow):
         # """)
 
         # Add the search input to the main layout
-        layout.addWidget(self.search_input)
+        self.main_layout.addWidget(self.search_input)
 
         # Connect the search input to the search functionality
         self.search_input.textChanged.connect(self.perform_search)
 
         self.tab_widget = QTabWidget()
-        layout.addWidget(self.tab_widget)
+        self.main_layout.addWidget(self.tab_widget)
 
         self.tabs = {}
         for tab_name in ["Live", "Movies", "Series"]:
@@ -681,7 +683,7 @@ class MainWindow(QMainWindow):
         )
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)  # Initially hidden
-        layout.addWidget(self.progress_bar)
+        self.main_layout.addWidget(self.progress_bar)
 
         # Initialize QTimer for progress updates
         self.progress_timer = QTimer()
@@ -703,7 +705,7 @@ class MainWindow(QMainWindow):
 
         # Add a layout for bottom controls
         bottom_layout = QHBoxLayout()
-        layout.addLayout(bottom_layout)
+        self.main_layout.addLayout(bottom_layout)
 
         # Add the "Always on Top" checkbox
         self.always_on_top_checkbox = QCheckBox("Always on Top")
@@ -859,7 +861,6 @@ class MainWindow(QMainWindow):
     def load_settings(self):
         self.hostname_input.setText(self.settings.value("hostname", ""))
         self.mac_input.setText(self.settings.value("mac_address", ""))
-        self.media_player_input.setText(self.settings.value("media_player", ""))
         self.threads_input.setValue(int(self.settings.value("num_threads", 5)))
         always_on_top = self.settings.value("always_on_top", False, type=bool)
         self.always_on_top_checkbox.setChecked(always_on_top)
@@ -874,7 +875,6 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         self.settings.setValue("hostname", self.hostname_input.text())
         self.settings.setValue("mac_address", self.mac_input.text())
-        self.settings.setValue("media_player", self.media_player_input.text())
         self.settings.setValue("num_threads", self.threads_input.value())
         self.settings.setValue("always_on_top", self.always_on_top_checkbox.isChecked())
         self.save_profiles()
@@ -896,12 +896,11 @@ class MainWindow(QMainWindow):
         options |= QFileDialog.DontUseNativeDialog
         file_dialog = QFileDialog()
         file_dialog.setFileMode(QFileDialog.ExistingFile)
-        file_dialog.setNameFilter("Executable Files (*.exe)")
+        # file_dialog.setNameFilter("Executable Files (*.exe)")
         if file_dialog.exec_():
             file_names = file_dialog.selectedFiles()
             if file_names:
                 media_player = file_names[0]
-                self.media_player_input.setText(media_player)
                 self.settings.setValue("media_player", media_player)
                 logging.debug(f"Media player selected: {media_player}")
 
@@ -910,10 +909,9 @@ class MainWindow(QMainWindow):
         # Determine which progress handler to reset based on the type of request
         hostname_input = self.hostname_input.text().strip()
         mac_address = self.mac_input.text().strip()
-        media_player = self.media_player_input.text().strip()
         num_threads = self.threads_input.value()
 
-        if not hostname_input or not mac_address or not media_player:
+        if not hostname_input or not mac_address:
             QMessageBox.warning(self, "Warning", "Please enter Hostname, MAC, and Media Player.")
             logging.warning("User attempted get playlist without full info.")
             return
@@ -1795,7 +1793,7 @@ class MainWindow(QMainWindow):
                 try:
                     stream_url = self.portal.get_episode_stream_url(movie_id, season_id, episode_id)
                     if stream_url:
-                        self.launch_media_player(stream_url)
+                        self.launch_video_view(stream_url)
                     else:
                         QMessageBox.critical(self, "Error", "Failed to get stream URL from Stalker portal.")
                 except Exception as e:
@@ -1808,7 +1806,7 @@ class MainWindow(QMainWindow):
                 try:
                     stream_url = self.portal.get_stream_link(channel)
                     if stream_url:
-                        self.launch_media_player(stream_url)
+                        self.launch_video_view(stream_url)
                     else:
                         QMessageBox.critical(self, "Error", "Failed to get stream URL from Stalker portal.")
                 except Exception as e:
@@ -1879,7 +1877,7 @@ class MainWindow(QMainWindow):
                         if cmd.lower().startswith("ffmpeg"):
                             cmd = cmd[6:].strip()
                         stream_url = cmd_value
-                        self.launch_media_player(stream_url)
+                        self.launch_video_view(stream_url)
                     else:
                         logging.error("Stream URL not found in the response.")
                         QMessageBox.critical(
@@ -1895,7 +1893,7 @@ class MainWindow(QMainWindow):
                 if cmd.startswith("ffmpeg "):
                     cmd = cmd[len("ffmpeg "):]
                     logging.debug("Stripped 'ffmpeg ' prefix from cmd.")
-                self.launch_media_player(cmd)
+                self.launch_video_view(cmd)
 
         elif item_type in ["vod", "episode"]:
             try:
@@ -1959,7 +1957,7 @@ class MainWindow(QMainWindow):
                     cmd_value = ' '.join(cmd_value.split(' ')[1:])
 
                     stream_url = cmd_value
-                    self.launch_media_player(stream_url)
+                    self.launch_video_view(stream_url)
                 else:
                     logging.error("Stream URL not found in the response.")
                     QMessageBox.critical(
@@ -2005,44 +2003,57 @@ class MainWindow(QMainWindow):
         # Restore scroll position after model is populated
         QTimer.singleShot(0, lambda: playlist_view.verticalScrollBar().setValue(scroll_position))
 
-    def launch_media_player(self, stream_url):
+    def launch_video_view(self, stream_url):
         # List of known prefixes to strip
         known_prefixes = ["ffmpeg ", "ffrt3 "]  # Add any other prefixes here
 
         # Strip any known prefix
-        original_url = stream_url
         stream_url = stream_url.strip()  # Remove extra spaces
         for prefix in known_prefixes:
             if stream_url.lower().startswith(prefix.lower()):
                 stream_url = stream_url[len(prefix):].strip()
                 logging.debug(f"Removed prefix '{prefix}' from stream_url. New URL: {stream_url}")
 
-        # Log the final URL
-        logging.debug(f"Launching media player with cleaned URL: {stream_url}")
+        # If already exists, remove to avoid duplication
+        if hasattr(self, 'video_widget') and self.video_widget:
+            self.stack.removeWidget(self.video_widget)
 
-        # Retrieve media player executable path
-        media_player = self.settings.value("media_player", "")  # Ensure VLC is set here
-        if media_player:
-            try:
-                # Define the VLC user-agent parameter
-                user_agent = "Lavf53.32.100"  # Customize this if needed
-                vlc_command = [media_player, stream_url, f":http-user-agent={user_agent}"]
+        self.video_widget = QWidget()
+        layout = QVBoxLayout(self.video_widget)
 
-                # Launch the media player with the cleaned URL and user-agent
-                subprocess.Popen(vlc_command)
-                logging.debug(f"Successfully launched media player with URL: {stream_url} and User-Agent: {user_agent}")
-            except Exception as e:
-                logging.error(f"Error opening media player: {e}")
-                QMessageBox.critical(
-                    self, "Error", f"Failed to launch media player: {e}"
-                )
-        else:
-            logging.error("Media player executable path not found in settings.")
-            QMessageBox.critical(
-                self,
-                "Error",
-                "Media player executable path not found in settings.",
-            )
+        self.video_frame = QFrame()
+        self.video_frame.setStyleSheet("background: black;")
+        layout.addWidget(self.video_frame)
+
+        back_button = QPushButton("Back")
+        back_button.clicked.connect(self.return_to_main_view)
+        layout.addWidget(back_button)
+
+        self.stack.addWidget(self.video_widget)
+        self.stack.setCurrentWidget(self.video_widget)
+
+        # VLC setup
+        self.vlc_instance = vlc.Instance()
+        self.media_player = self.vlc_instance.media_player_new()
+
+        if sys.platform == "darwin":
+            self.media_player.set_nsobject(int(self.video_frame.winId()))
+        elif sys.platform.startswith("linux"):
+            self.media_player.set_xwindow(self.video_frame.winId())
+        elif sys.platform.startswith("win"):
+            self.media_player.set_hwnd(self.video_frame.winId())
+
+        media = self.vlc_instance.media_new(stream_url)
+        self.media_player.set_media(media)
+        self.media_player.play()
+
+    def return_to_main_view(self):
+        if hasattr(self, 'media_player'):
+            self.media_player.stop()
+            self.media_player.release()
+            self.media_player = None
+
+        self.stack.setCurrentWidget(self.main_widget)
 
     def resizeEvent(self, event):
         pass
