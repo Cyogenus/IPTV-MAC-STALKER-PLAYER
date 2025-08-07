@@ -517,7 +517,9 @@ class StalkerPortal:
             self.bearer_token = token
             self.token_timestamp = time.time()
             logger.debug(f"Profile token updated: {self.token}")
+
         logger.info("Profile fetched successfully.")
+        return js_data
 
     def generate_signature(self) -> str:
         """
