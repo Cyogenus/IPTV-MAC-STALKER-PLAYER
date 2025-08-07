@@ -81,7 +81,7 @@ def get_token(session, url, mac_address):
 
 
 class RequestThread(QThread):
-    request_complete = pyqtSignal(dict)
+    request_complete = pyqtSignal(dict, dict, dict)
     update_progress = pyqtSignal(int)
     channels_loaded = pyqtSignal(list)
 
@@ -125,45 +125,30 @@ class RequestThread(QThread):
                 "Authorization": f"Bearer {token}",
             }
 
-            # **Always Reset Progress to 0 at the Start**
-            self.update_progress.emit(0)  # Reset progress bar to 0%
+            self.update_progress.emit(0)
 
             # Fetch profile and account info
             try:
                 profile_url = f"{url}/portal.php?type=stb&action=get_profile&JsHttpRequest=1-xml"
-                logging.debug(f"Fetching profile from {profile_url}")
                 response_profile = session.get(profile_url, cookies=cookies, headers=headers, timeout=10)
                 response_profile.raise_for_status()
                 profile_data = response_profile.json()
-                logging.debug(f"Profile data: {profile_data}")
             except Exception as e:
-                logging.error(f"Error fetching profile: {e}")
                 profile_data = {}
 
             try:
                 account_info_url = f"{url}/portal.php?type=account_info&action=get_main_info&JsHttpRequest=1-xml"
-                logging.debug(f"Fetching account info from {account_info_url}")
                 response_account_info = session.get(account_info_url, cookies=cookies, headers=headers, timeout=10)
                 response_account_info.raise_for_status()
                 account_info_data = response_account_info.json()
-                logging.debug(f"Account info data: {account_info_data}")
             except Exception as e:
-                logging.error(f"Error fetching account info: {e}")
                 account_info_data = {}
 
             if self.category_type and self.category_id:
-                # Fetch channels in a category
                 logging.debug("Fetching channels.")
                 channels = self.get_channels(
-                    session,
-                    url,
-                    mac_address,
-                    token,
-                    self.category_type,
-                    self.category_id,
-                    self.num_threads,
-                    cookies,
-                    headers,
+                    session, url, mac_address, token, self.category_type,
+                    self.category_id, self.num_threads, cookies, headers,
                 )
                 self.update_progress.emit(100)
                 self.channels_loaded.emit(channels)
@@ -197,7 +182,15 @@ class RequestThread(QThread):
                         self.update_progress.emit(progress_percent)
                         logging.debug(f"Progress: {progress_percent}%")
 
-                self.request_complete.emit(data)
+                # Emit the complete data and account info ONCE
+                self.request_complete.emit(data, account_info_data, profile_data)
+
+        except Exception as e:
+            logging.error(f"Request thread error: {str(e)}")
+            traceback.print_exc()
+            self.request_complete.emit({}, {})
+            self.update_progress.emit(0)
+
 
         except Exception as e:
             logging.error(f"Request thread error: {str(e)}")
@@ -479,7 +472,7 @@ class ProfileDialog(QDialog):
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setStyleSheet(
-            "QProgressBar {text-align: center; color: white;} QProgressBar::chunk {background-color: purple;}"
+            "QProgressBar {text-align: center; color: white;} QProgressBar::chunk {background-color: cyan;}"
         )
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)  # Initially hidden
@@ -562,8 +555,8 @@ class ProfileDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAC IPTV Player by MY-1 v3.5")
-        self.setGeometry(100, 100, 550, 560)
+        self.setWindowTitle("MAC IPTV Player by MY-1 v3.9")
+        self.setGeometry(100, 100, 610, 560)
 
         self.settings = QSettings("MyCompany", "IPTVPlayer")
         self.profiles = []
@@ -650,34 +643,44 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tab_widget)
 
         self.tabs = {}
-        for tab_name in ["Live", "Movies", "Series"]:
+        for tab_name in ["Live", "Movies", "Series", "Info"]:  # Add Info tab here
             tab = QWidget()
             tab_layout = QVBoxLayout(tab)
-            playlist_view = QListView()
-            playlist_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            tab_layout.addWidget(playlist_view)
-
-            playlist_model = QStandardItemModel(playlist_view)
-            playlist_view.setModel(playlist_model)
-            playlist_view.doubleClicked.connect(self.on_playlist_selection_changed)
-
-            self.tab_widget.addTab(tab, tab_name)
-            self.tabs[tab_name] = {
-                "tab_widget": tab,
-                "playlist_view": playlist_view,
-                "playlist_model": playlist_model,
-                "current_category": None,
-                "navigation_stack": [],
-                "playlist_data": [],
-                "current_channels": [],
-                "current_series_info": [],
-                "current_view": "categories",
-            }
+            if tab_name == "Info":
+                info_label = QLabel("No info loaded yet.")
+                info_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                info_label.setWordWrap(True)
+                tab_layout.addWidget(info_label)
+                self.tab_widget.addTab(tab, tab_name)
+                self.tabs[tab_name] = {
+                    "tab_widget": tab,
+                    "info_label": info_label,
+                    "info_data": {},
+                }
+            else:
+                playlist_view = QListView()
+                playlist_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                tab_layout.addWidget(playlist_view)
+                playlist_model = QStandardItemModel(playlist_view)
+                playlist_view.setModel(playlist_model)
+                playlist_view.doubleClicked.connect(self.on_playlist_selection_changed)
+                self.tab_widget.addTab(tab, tab_name)
+                self.tabs[tab_name] = {
+                    "tab_widget": tab,
+                    "playlist_view": playlist_view,
+                    "playlist_model": playlist_model,
+                    "current_category": None,
+                    "navigation_stack": [],
+                    "playlist_data": [],
+                    "current_channels": [],
+                    "current_series_info": [],
+                    "current_view": "categories",
+                }
 
         # **Rework Progress Bar to Use QTimer for Smooth Progression**
         self.progress_bar = QProgressBar()
         self.progress_bar.setStyleSheet(
-            "QProgressBar {text-align: center; color: white;} QProgressBar::chunk {background-color: purple;}"
+            "QProgressBar {text-align: center; color: white;} QProgressBar::chunk {background-color: cyan;}"
         )
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)  # Initially hidden
@@ -743,7 +746,50 @@ class MainWindow(QMainWindow):
             self.settings.setValue("dark_theme", False)
 
     def apply_dark_theme(self):
-        self.setStyleSheet(qdarkstyle.load_stylesheet_pyqt5())
+        # Load and customize qdarkstyle's stylesheet
+        qss = qdarkstyle.load_stylesheet(qt_api='pyqt5')
+        qss = (
+            qss
+            .replace('#232629', '#1b2332')      # Main background to dark blue-gray
+            .replace('#31363b', '#253046')      # Widget background to lighter blue-gray
+            .replace('#2a82da', '#00dfff')      # Highlight/selection to cyan
+            .replace('#3daee9', '#9befff')      # Lighter highlight/secondary accent (light blue-cyan)
+            .replace('#c8c8c8', '#e3f6ff')      # Main text to a softer white-blue
+            .replace('#eff0f1', '#e3f6ff')      # Widget text
+            .replace('#787878', '#5fd6ff')      # Disabled text to pale cyan
+        )
+        # You can append custom tweaks here if you want:
+        qss += """
+        QPushButton {
+            background-color: #23395d;
+            color: #e3f6ff;
+            border: 1px solid #00dfff;
+            border-radius: 6px;
+            padding: 4px 12px;
+        }
+        QPushButton:pressed, QPushButton:checked {
+            background-color: #00dfff;
+            color: #1b2332;
+        }
+        QComboBox, QLineEdit, QTextEdit, QAbstractItemView, QListWidget, QPlainTextEdit {
+            background-color: #253046;
+            color: #e3f6ff;
+            border: 1px solid #00dfff;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #1b2332;
+            color: #00dfff;
+            selection-background-color: #00dfff;
+            selection-color: #1b2332;
+        }
+        QCheckBox::indicator:checked {
+            border: 2px solid #00dfff;
+            background: #253046;
+        }
+        """
+        # Now apply the custom stylesheet to your window (or app)
+        self.setStyleSheet(qss)
+
 
     def apply_light_theme(self):
         self.setStyleSheet("")  # Reset to default light theme
@@ -918,6 +964,11 @@ class MainWindow(QMainWindow):
             logging.warning("User attempted get playlist without full info.")
             return
 
+        self.tabs["Info"]["info_label"].setText("Loading info...")
+        self.tabs["Info"]["info_data"] = {}
+
+        
+
         parsed_url = urlparse(hostname_input)
         if not parsed_url.scheme and not parsed_url.netloc:
             parsed_url = urlparse(f"http://{hostname_input}")
@@ -928,6 +979,8 @@ class MainWindow(QMainWindow):
             (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
         )
         self.mac_address = mac_address
+
+        self.portal = None  # <--- ADD THIS LINE AT THE START!
 
         if "/stalker_portal/" in hostname_input:
             # Stalker portal logic
@@ -955,6 +1008,8 @@ class MainWindow(QMainWindow):
             self.token = get_token(self.session, self.base_url, self.mac_address)
             self.token_timestamp = time.time()
 
+            
+
             if not self.token:
                 QMessageBox.critical(self, "Error", "Failed to retrieve token. Check MAC/URL.")
                 return
@@ -962,6 +1017,7 @@ class MainWindow(QMainWindow):
             if (self.current_request_thread is not None and self.current_request_thread.isRunning()):
                 QMessageBox.warning(self, "Warning", "A playlist request is already in progress.")
                 return
+            
 
             # **Reset non-Stalker progress at the start**
             self.handle_non_stalker_progress(0)
@@ -970,6 +1026,7 @@ class MainWindow(QMainWindow):
                 self.base_url, mac_address, self.session, self.token, num_threads=num_threads,
             )
             self.request_thread.request_complete.connect(self.on_initial_playlist_received)
+
             self.request_thread.update_progress.connect(self.handle_non_stalker_progress)
             self.request_thread.start()
             self.current_request_thread = self.request_thread
@@ -987,6 +1044,33 @@ class MainWindow(QMainWindow):
             self.current_stalker_thread = None
             return
 
+        # --- SAFELY FETCH PROFILE INFO ---
+        profile_info = None
+        try:
+            # Try get_profile() first (may update self.portal.profile as a side effect)
+            if hasattr(self.portal, 'get_profile'):
+                result = self.portal.get_profile()
+                # Use return value if dict, else fallback to self.portal.profile
+                if isinstance(result, dict) and result:
+                    profile_info = result
+                elif hasattr(self.portal, "profile") and isinstance(self.portal.profile, dict):
+                    profile_info = self.portal.profile
+            elif hasattr(self.portal, "profile") and isinstance(self.portal.profile, dict):
+                profile_info = self.portal.profile
+            else:
+                profile_info = {}
+        except Exception as e:
+            logging.warning(f"Failed to fetch Stalker profile info: {e}")
+            profile_info = {}
+
+        # Make sure it's always a dict
+        if not isinstance(profile_info, dict):
+            profile_info = {}
+
+        # Wrap as {"js": ...} for update_info_tab compatibility
+        self.update_info_tab({"js": profile_info})
+
+        # --- LOAD CATEGORY DATA ---
         for tab_name, tab_data in categories.items():
             tab_info = self.tabs.get(tab_name)
             if not tab_info:
@@ -1002,13 +1086,16 @@ class MainWindow(QMainWindow):
         self.handle_stalker_progress(100)  # Finalize progress
         self.current_stalker_thread = None
 
+
+
+
     def on_stalker_error(self, error_message):
         self.show_error_message(f"Error using StalkerPortal: {error_message}")
         logging.error(f"Stalker portal error: {error_message}")
         self.handle_stalker_progress(0)  # Reset progress on error
         self.current_stalker_thread = None
 
-    def on_initial_playlist_received(self, data):
+    def on_initial_playlist_received(self, data, account_info_data, profile_data):
         if self.current_request_thread != self.sender():
             logging.debug("Received data from old thread. Ignoring.")
             return
@@ -1019,6 +1106,7 @@ class MainWindow(QMainWindow):
             self.handle_non_stalker_progress(0)  # Reset progress on error
             self.current_request_thread = None
             return
+
         for tab_name, tab_data in data.items():
             tab_info = self.tabs.get(tab_name)
             if not tab_info:
@@ -1029,9 +1117,118 @@ class MainWindow(QMainWindow):
             tab_info["current_category"] = None
             tab_info["navigation_stack"] = []
             self.update_playlist_view(tab_name)
+
         logging.debug("Playlist data loaded into tabs.")
-        self.handle_non_stalker_progress(100)  # Finalize progress
+        self.handle_non_stalker_progress(100)
         self.current_request_thread = None
+
+        # NEW: Pass both account_info_data and profile_data to update_info_tab
+        self.update_info_tab(account_info_data, profile_data)
+
+
+
+    def update_info_tab(self, account_info, profile_info=None):
+        info_label = self.tabs["Info"]["info_label"]
+
+        js_account = account_info.get("js", {}) if isinstance(account_info, dict) else {}
+        js_profile = profile_info.get("js", {}) if isinstance(profile_info, dict) else {}
+
+        # Helper to check for real/non-junk values
+        def is_real(val):
+            return bool(val and str(val).strip() not in {"", "0", "000000000", "none", "None", "0000-00-00 00:00:00"})
+
+        # MAC address
+        mac = (
+            js_account.get("mac")
+            or js_account.get("device_mac")
+            or js_profile.get("mac_address")
+            or js_profile.get("device_mac")
+            or "N/A"
+        )
+
+        # Parental password, prefer profile for non-stalker
+        parent_password = (
+            js_profile.get("parent_password")
+            or js_account.get("parent_password")
+            or "N/A"
+        )
+
+        # Expiry (avoid junk)
+        def get_expiry(*fields):
+            for f in fields:
+                if is_real(f):
+                    return f
+            return "N/A"
+
+        expire = get_expiry(
+            js_account.get("expire_date"),
+            js_account.get("exp_date"),
+            js_account.get("phone"),
+            js_profile.get("expire_date"),
+            js_profile.get("exp_date"),
+            js_profile.get("phone")
+        )
+
+        # --- Stalker fields (show only if real) ---
+        fname = js_account.get("fname") or js_profile.get("fname")
+        expire_billing_date = js_account.get("expire_billing_date") or js_profile.get("expire_billing_date")
+        if not is_real(expire_billing_date):
+            expire_billing_date = None
+        storages = js_account.get("storages") or js_profile.get("storages")
+        max_online_val = None
+        if storages and isinstance(storages, dict):
+            nums = []
+            for storage in storages.values():
+                v = storage.get("max_online")
+                try:
+                    if is_real(v):
+                        nums.append(int(str(v)))
+                except Exception:
+                    pass
+            if nums:
+                max_online_val = max(nums)
+        if max_online_val is None:
+            v = js_account.get("max_online") or js_profile.get("max_online")
+            try:
+                if is_real(v):
+                    max_online_val = int(str(v))
+            except Exception:
+                pass
+
+        # Only show stalker layout if *real* fields are present
+        stalker_present = any([
+            is_real(fname),
+            is_real(expire_billing_date),
+            max_online_val is not None
+        ])
+
+        if stalker_present:
+            info_text = f"""
+            <b>Name:</b> {fname or 'N/A'}<br><br>
+            <b>Mac:</b> {mac or 'N/A'}<br><br>
+            <b>Max Online:</b> {max_online_val if max_online_val is not None else 'N/A'}<br><br>
+            <b>Parental Password:</b> {parent_password or 'N/A'}<br><br>
+            <b>Expire Date:</b> {expire_billing_date or expire or 'N/A'}
+            """
+        else:
+            info_text = f"""
+            <b>Mac:</b> {mac}<br><br>
+            <b>Parental Password:</b> {parent_password}<br><br>
+            <b>Expire date:</b> {expire}
+            """
+
+        info_label.setText(info_text)
+        self.tabs["Info"]["info_data"] = {**js_account, **js_profile}
+
+
+
+
+
+
+
+
+
+
 
     def update_playlist_view(self, tab_name, scroll_position=0):
         tab_info = self.tabs[tab_name]
