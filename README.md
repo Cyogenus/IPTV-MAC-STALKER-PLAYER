@@ -1,34 +1,48 @@
 
-### MAC-Portal IPTV Player by MY-1 for Windows
+# MAC-Portal IPTV Player by MY-1 for Windows
 
-- **Overview**: Best open-source Python MAC portal player on GitHub.
-- **Purpose**: Streams channels, VOD, and series from MAC-Based IPTV portals on Windows.
+## Overview
+The most advanced and polished open-source Python **MAC & Stalker IPTV player** on GitHub.
 
-#### Features
-- **MAC-Based IPTV Support**: Stream content from MAC-Based IPTV portals.
-- **Channel Streaming**: Watch live channels.
-- **VOD and Series Playback**: Access on-demand movies and TV series.
-- **VLC Player Integration**: Uses VLC as the preferred media player. [Download VLC here](https://www.videolan.org/vlc/).
--  **SMPlayer Integration**: Uses Smplayer as the preferred media player. [Download Smplayer here](https://www.smplayer.info).
-- **Multithreading**: Enables fast playlist loading.
+## Purpose
+Stream **Live TV, VOD, and Series** from MAC-Based and Stalker IPTV portals directly on Windows with powerful extra features.
 
-#### Getting Started
-- **Prerequisites**:
-  - Windows operating system
-  - Python 3.x
-  - VLC Media Player
-- **Dependencies**: Most packages are part of Python's standard library. Use `pip install -r requirements.txt` for additional dependencies.
+---
+
+## 🔑 Key Features
+
+- **MAC & Stalker IPTV Support** – Full compatibility with **MAC-based portals** and **Stalker portals**
+- **Live Channel Streaming** – Watch live TV channels with smooth playback
+- **VOD & Series Playback** – Access movies and TV series from your IPTV provider
+- **Live EPG (NEW in v4.0)** – View **real-time program information** while browsing channels (if supported by your server)
+- **Movie & TV Show Tooltips (NEW)** – Hover over a title to instantly see **poster + description popups**
+- **Info Tab (NEW)** – Instantly view **server info, middleware version, and account details**
+- **Theme Refresh (Cyan Look)** – Modern, sleek, cyan-styled interface for a clean viewing experience
+- **Favorites & Categories** – Organize your channels, movies, and series for quick access
+- **Playlist Management** – Smart **multithreading** ensures fast playlist loading even with large lineups
+- **Multi-Player Support**
+  - **VLC Integration**: Uses VLC as the preferred media player → [Download VLC](https://www.videolan.org/vlc/)
+  - **SMPlayer Integration**: Alternative player for smooth playback → [Download SMPlayer](https://www.smplayer.info)
+- **Cross-Compatibility** – Works with both **Windows 10** and **Windows 11**
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Windows OS
+- Python 3.x
+- VLC Media Player (or SMPlayer)
+
+### Dependencies
+Most are part of Python’s standard library.  
+Install extras via:
 
 
-#### Login Example
-- **Portal URL**: `http://server.sstv.one/c/`
-- **MAC Address**: `00:1a:79:a2:9c:92`
+pip install -r requirements.txt
 
-- #### Stalker Login Example
-- **Portal URL**: `http://someserver/stalker_portal/c/`
-- **MAC Address**: `00:1a:79:a2:9c:92`
+
+
+
 
 ![image](https://github.com/user-attachments/assets/a0b788b3-614c-49bd-9fab-583379aed0d8)
-
-
-
