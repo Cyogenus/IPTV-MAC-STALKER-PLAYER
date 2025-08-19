@@ -42,7 +42,7 @@ Install extras via:
 pip install -r requirements.txt
 
 
-
+![GitHub all releases](https://img.shields.io/github/downloads/Cyogenus/IPTV-MAC-STALKER-PLAYER/total?color=blue&label=Downloads&logo=github)
 
 
 ![image](https://github.com/user-attachments/assets/a0b788b3-614c-49bd-9fab-583379aed0d8)
