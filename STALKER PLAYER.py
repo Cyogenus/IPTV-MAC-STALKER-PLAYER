@@ -3,10 +3,21 @@ import traceback
 import requests
 import subprocess
 import logging
+import tempfile
 import re
 import time
+import html
 import qdarkstyle
+from urllib.parse import quote, urlparse, urlunparse, urljoin
+import os
+import hashlib
+from PyQt5.QtCore import QUrl, QTemporaryDir
+from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
+
 import concurrent.futures  # Added for parallel execution
+from datetime import datetime
+from Epg import EpgManager, format_epg_tooltip
+
 from stalker import StalkerPortal
 from PyQt5.QtCore import (
     QSettings,
@@ -51,7 +62,10 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
+   # ---- EPG roles/keys ----
+ROLE_ITEM_TYPE   = Qt.UserRole + 1
+ROLE_EPG_TEXT    = Qt.UserRole + 2
+ROLE_CHANNEL_KEY = Qt.UserRole + 3
 # Reintroduce get_token for non-stalker portals
 def get_token(session, url, mac_address):
     try:
@@ -192,11 +206,6 @@ class RequestThread(QThread):
             self.update_progress.emit(0)
 
 
-        except Exception as e:
-            logging.error(f"Request thread error: {str(e)}")
-            traceback.print_exc()
-            self.request_complete.emit({})
-            self.update_progress.emit(0)
 
     def get_genres(self, session, url, mac_address, token, cookies, headers):
         try:
@@ -555,7 +564,7 @@ class ProfileDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MAC IPTV Player by MY-1 v3.9")
+        self.setWindowTitle("MAC IPTV Player by MY-1 v4.0")
         self.setGeometry(100, 100, 610, 560)
 
         self.settings = QSettings("MyCompany", "IPTVPlayer")
@@ -642,10 +651,17 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         layout.addWidget(self.tab_widget)
 
+        self.tooltip_max_width = 520   # overall tooltip width cap
+        self.tooltip_image_w  = 140    # poster width
+        self.tooltip_font_px  = 12     # base font size inside the HTML
+        self.tooltip_desc_max = 500    # max description chars (prevents HUGE tips)
+
+
         self.tabs = {}
-        for tab_name in ["Live", "Movies", "Series", "Info"]:  # Add Info tab here
+        for tab_name in ["Live", "Movies", "Series", "Info"]:
             tab = QWidget()
             tab_layout = QVBoxLayout(tab)
+
             if tab_name == "Info":
                 info_label = QLabel("No info loaded yet.")
                 info_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
@@ -660,10 +676,27 @@ class MainWindow(QMainWindow):
             else:
                 playlist_view = QListView()
                 playlist_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                playlist_view.setMouseTracking(True)  # enable smooth hover tooltips
                 tab_layout.addWidget(playlist_view)
+
                 playlist_model = QStandardItemModel(playlist_view)
                 playlist_view.setModel(playlist_model)
+
+                # we only handle double-click for play/navigation
                 playlist_view.doubleClicked.connect(self.on_playlist_selection_changed)
+
+                # --- Movies: fetch & inject poster into tooltip on hover ---
+                if tab_name == "Movies":
+                    playlist_view.entered.connect(
+                        lambda idx, tn=tab_name: self._maybe_update_movie_tooltip_on_hover(tn, idx)
+                    )
+
+                # --- Series: same idea for series/seasons/episodes ---
+                if tab_name == "Series":
+                    playlist_view.entered.connect(
+                        lambda idx, tn=tab_name: self._maybe_update_media_tooltip_on_hover(tn, idx)
+                    )
+
                 self.tab_widget.addTab(tab, tab_name)
                 self.tabs[tab_name] = {
                     "tab_widget": tab,
@@ -676,6 +709,11 @@ class MainWindow(QMainWindow):
                     "current_series_info": [],
                     "current_view": "categories",
                 }
+
+        # ---- create after the loop (only once) ----
+        self.epg = None
+        self._epg_row_by_key = {}   # key -> QStandardItem in Live tab
+
 
         # **Rework Progress Bar to Use QTimer for Smooth Progression**
         self.progress_bar = QProgressBar()
@@ -721,6 +759,9 @@ class MainWindow(QMainWindow):
         # Align the bottom controls to the right
         bottom_layout.addStretch()
 
+        self._live_epg_prefetch_timer = None  # single timer instance for Live prefetch
+        self._epg_generation = 0 
+
         # Load saved settings
         self.load_settings()
         always_on_top = self.settings.value("always_on_top", False, type=bool)
@@ -736,6 +777,309 @@ class MainWindow(QMainWindow):
             self.apply_dark_theme()
         else:
             self.apply_light_theme()
+
+    def _poster_cache_path(self, url: str) -> str:
+        if not url:
+            return ""
+        h = hashlib.sha1(url.encode("utf-8")).hexdigest()
+        cache_dir = os.path.join(tempfile.gettempdir(), "maciptv_posters")
+        os.makedirs(cache_dir, exist_ok=True)
+        ext = os.path.splitext(urlparse(url).path)[1] or ".jpg"
+        return os.path.join(cache_dir, f"{h}{ext}")
+
+    def _poster_local_file(self, url: str) -> str:
+        try:
+            if not url:
+                return ""
+            path = self._poster_cache_path(url)
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                sess = self.session or requests.Session()
+                r = sess.get(url, timeout=8)
+                r.raise_for_status()
+                with open(path, "wb") as f:
+                    f.write(r.content)
+            return path
+        except Exception as e:
+            logging.debug(f"Poster download/cache failed: {e}")
+            return ""
+
+    def _file_url(self, path: str) -> str:
+        # Correctly formats file:/// URLs on Windows/mac/Linux
+        return QUrl.fromLocalFile(path).toString() if path else ""
+
+
+    def _absolute_url(self, maybe_url: str) -> str:
+        """
+        Turn relative paths like '/stalker_portal/...' into absolute URLs based on self.base_url.
+        If already absolute, return as-is.
+        """
+        if not maybe_url:
+            return ""
+        u = str(maybe_url).strip()
+        if u.lower().startswith(("http://", "https://")):
+            return u
+        base = (self.base_url or "").rstrip("/") + "/"
+        return urljoin(base, u.lstrip("/"))
+
+    def _best_image_url(self, obj: dict) -> str:
+        """
+        Try common keys used by VOD/Series/Episodes. Fallback to parent poster if present.
+        """
+        if not isinstance(obj, dict):
+            return ""
+        for key in ("screenshot_uri", "pic", "cover", "poster", "logo", "icon", "image"):
+            if obj.get(key):
+                return self._absolute_url(obj.get(key))
+        # parent-propagated poster for seasons/episodes
+        if obj.get("_parent_poster"):
+            return self._absolute_url(obj["_parent_poster"])
+        return ""
+
+
+
+
+    def _format_movie_tooltip(self, m: dict) -> str:
+        if not isinstance(m, dict):
+            return ""
+
+        title = m.get("name") or m.get("o_name") or "Unknown title"
+        year_raw = (m.get("year") or "").strip()
+        year = year_raw[:4] if len(year_raw) >= 4 and year_raw[:4].isdigit() else ""
+        genres = m.get("genres_str") or ""
+        director = m.get("director") or ""
+        description = (m.get("description") or "").strip()
+        if self.tooltip_desc_max and len(description) > self.tooltip_desc_max:
+            description = description[: self.tooltip_desc_max].rstrip() + "…"
+        rating = m.get("rating_imdb") or ""
+        added = m.get("added") or ""
+        duration_min = m.get("time")
+        duration_txt = f"{duration_min} min" if isinstance(duration_min, int) and duration_min > 0 else ""
+        age = m.get("age") or ""
+
+        actors = (m.get("actors") or "").strip()
+        if actors:
+            actor_list = [a.strip() for a in actors.split(",") if a.strip()]
+            actors = ", ".join(actor_list[:8]) + ("…" if len(actor_list) > 8 else "")
+
+        local_path = m.get("_local_poster_path", "")
+        poster_html = (
+            f"<img src='{self._file_url(local_path)}' width='{self.tooltip_image_w}'>"
+            if local_path else ""
+        )
+
+        # Table layout is the most reliable for Qt rich text sizing.
+        html = f"""
+        <qt>
+          <div style="max-width:{self.tooltip_max_width}px; font-size:{self.tooltip_font_px}px; line-height:1.25;">
+            <table cellspacing="0" cellpadding="0">
+              <tr>
+                <td style="vertical-align:top; padding-right:8px;">{poster_html}</td>
+                <td style="vertical-align:top;">
+                  <div style="font-size:{self.tooltip_font_px + 1}px; font-weight:bold;">
+                    {title}{' ('+year+')' if year else ''}
+                  </div>
+                  <div style="color:#9aa; margin-top:2px;">{genres}</div>
+                  <div style="margin-top:6px;">
+                    <b>IMDb:</b> {rating or '—'}
+                    {' &nbsp;•&nbsp; ' + '<b>Duration:</b> ' + duration_txt if duration_txt else ''}
+                    {' &nbsp;•&nbsp; ' + '<b>Age:</b> ' + age if age else ''}
+                  </div>
+                  {"<div style='margin-top:4px;'><b>Director:</b> " + director + "</div>" if director else ""}
+                  {"<div style='margin-top:2px;'><b>Actors:</b> " + actors + "</div>" if actors else ""}
+                  {"<div style='margin-top:6px;'>" + description + "</div>" if description else ""}
+                  {"<div style='margin-top:6px;color:#9aa;'><i>Added:</i> " + added + "</div>" if added else ""}
+                </td>
+              </tr>
+            </table>
+          </div>
+        </qt>
+        """
+        return html
+
+
+
+    def _prefetch_live_epg_for_current_list(self, tab_name: str, *, batch_size: int = 25, interval_ms: int = 10):
+        """
+        Prefetch EPG for the current Live list in small timed batches.
+        Older prefetch gets canceled automatically when a new category/list is shown.
+        """
+        if not self.epg or tab_name != "Live":
+            return
+
+        tab_info = self.tabs.get(tab_name) or {}
+        model: QStandardItemModel = tab_info.get("playlist_model")
+        if not model:
+            return
+
+        # gather pending channel items
+        pending_items = []
+        for row in range(model.rowCount()):
+            item = model.item(row)
+            if not item:
+                continue
+            item_type = item.data(ROLE_ITEM_TYPE)
+            if item_type != "channel":
+                continue
+            if item.text().strip().lower() == "go back":
+                continue
+            key = item.data(ROLE_CHANNEL_KEY)
+            epg_text = item.data(ROLE_EPG_TEXT)
+            if not epg_text or "Loading EPG" in str(epg_text):
+                ch = item.data(Qt.UserRole) or {}
+                pending_items.append((key, ch, item))
+
+        if not pending_items:
+            return
+
+        # Stop previous timer if any
+        if self._live_epg_prefetch_timer:
+            try:
+                self._live_epg_prefetch_timer.stop()
+                self._live_epg_prefetch_timer.deleteLater()
+            except Exception:
+                pass
+            self._live_epg_prefetch_timer = None
+
+        # Capture the generation for this list
+        my_gen = self._epg_generation
+        queue = pending_items[:]  # shallow copy
+
+        t = QTimer(self)
+        t.setInterval(interval_ms)
+        self._live_epg_prefetch_timer = t
+
+        def _tick():
+            nonlocal queue, my_gen
+            # If category/view has changed, abort this prefetch
+            if my_gen != self._epg_generation:
+                t.stop()
+                t.deleteLater()
+                if self._live_epg_prefetch_timer is t:
+                    self._live_epg_prefetch_timer = None
+                return
+
+            # Model vanished or changed? abort safely
+            if not model or model is not self.tabs["Live"]["playlist_model"]:
+                t.stop()
+                t.deleteLater()
+                if self._live_epg_prefetch_timer is t:
+                    self._live_epg_prefetch_timer = None
+                return
+
+            batch = queue[:batch_size]
+            queue = queue[batch_size:]
+
+            for key, ch, item in batch:
+                try:
+                    # refresh loading label if needed
+                    if not item.data(ROLE_EPG_TEXT):
+                        item.setData("Loading EPG…", ROLE_EPG_TEXT)
+                        name = (ch.get("name") or "Unknown")
+                        item.setText(f"{name}    — Loading EPG…")
+                    # enqueue EPG fetch
+                    self.epg.request(ch, size=6)
+                except Exception:
+                    pass
+
+            if not queue:
+                t.stop()
+                t.deleteLater()
+                if self._live_epg_prefetch_timer is t:
+                    self._live_epg_prefetch_timer = None
+
+        t.timeout.connect(_tick)
+        t.start()
+
+
+     
+
+    def _epg_channel_key(self, channel: dict) -> str:
+        """
+        Mirror EpgManager's key logic so we can map EPG updates to list rows.
+        """
+        try:
+            if isinstance(channel, dict):
+                for k in ("ch_id", "id", "cid", "ch", "number", "cmd", "name"):
+                    v = channel.get(k)
+                    if v is not None and str(v).strip():
+                        return str(v)
+                return "|".join(f"{k}={channel[k]}" for k in sorted(channel))
+            return str(channel)
+        except Exception:
+            return str(channel)
+
+    def _compact_epg_line(self, items: list, max_items: int = 3) -> str:
+        """
+        Inline example (title first, 12h):
+        'The News 3:00 PM – 3:30 PM • Game Time 3:30 PM – 4:00 PM'
+        Robust against missing/unnormalized datetimes.
+        """
+        if not isinstance(items, list) or not items:
+            return "No EPG"
+
+        def _to_dt(val):
+            if isinstance(val, datetime):
+                return val
+            if isinstance(val, (int, float)):
+                try:
+                    if val > 10_000_000_000:  # looks like ms
+                        val = val / 1000.0
+                    return datetime.fromtimestamp(val)
+                except Exception:
+                    return None
+            if isinstance(val, str) and val.strip().isdigit():
+                try:
+                    n = int(val.strip())
+                    if n > 10_000_000_000:
+                        n = n / 1000.0
+                    return datetime.fromtimestamp(n)
+                except Exception:
+                    return None
+            return None
+
+        def _first_dt(d: dict, keys: tuple[str, ...]):
+            for k in keys:
+                if k in d:
+                    dt = _to_dt(d.get(k))
+                    if dt:
+                        return dt
+            return None
+
+        def _fmt12(dt):
+            return dt.strftime("%I:%M %p").lstrip("0") if isinstance(dt, datetime) else "??:??"
+
+        parts = []
+        for it in items[:max_items]:
+            if not isinstance(it, dict):
+                continue
+
+            name = (it.get("name") or it.get("title") or it.get("progname") or it.get("program") or "—").strip()
+
+            # Prefer normalized keys; fall back to raw fields
+            start_dt = it.get("start_dt")
+            end_dt   = it.get("end_dt")
+            if not isinstance(start_dt, datetime):
+                start_dt = _first_dt(it, ("start_dt", "start", "start_timestamp", "t_time"))
+            if not isinstance(end_dt, datetime):
+                end_dt = _first_dt(it, ("end_dt", "end", "end_timestamp", "s_time"))
+
+            # Derive end from duration if missing
+            if not end_dt and start_dt:
+                dur = it.get("duration") or it.get("prog_duration")
+                try:
+                    dur_i = int(dur) if dur is not None else None
+                    if dur_i and 0 < dur_i < 24 * 3600:
+                        end_dt = datetime.fromtimestamp(int(start_dt.timestamp()) + dur_i)
+                except Exception:
+                    pass
+
+            s = _fmt12(start_dt)
+            e = _fmt12(end_dt)
+
+            parts.append(name if (s == "??:??" and e == "??:??") else f"{name} {s} – {e}")
+
+        return " • ".join(parts) if parts else "No EPG"
+
 
     def toggle_dark_theme(self, state):
         if state == Qt.Checked:
@@ -787,12 +1131,35 @@ class MainWindow(QMainWindow):
             background: #253046;
         }
         """
+
+
+        qss += """
+        QToolTip {
+            padding: 6px 8px;
+            border: 1px solid #00dfff;
+            background: #1b2332;
+            color: #e3f6ff;
+            font-size: 12px;       /* change size here */
+        }
+        """
+
         # Now apply the custom stylesheet to your window (or app)
         self.setStyleSheet(qss)
 
 
     def apply_light_theme(self):
-        self.setStyleSheet("")  # Reset to default light theme
+        # Reset to Qt defaults, then add only the tooltip styling you want
+        qss = """
+        QToolTip {
+            padding: 6px 8px;
+            border: 1px solid #888;
+            background: #ffffff;
+            color: #222;
+            font-size: 12px;   /* change size here */
+        }
+        """
+        self.setStyleSheet(qss)
+
 
     def get_icon_for_item(self, item_type):
         style = QApplication.style()
@@ -880,6 +1247,23 @@ class MainWindow(QMainWindow):
                 # Optionally, perform additional actions here if needed
                 logging.debug("Progress bar reached 100% (Non-Stalker).")
 
+
+
+    def _absolute_url(self, maybe_url: str) -> str:
+        """
+        Turn relative paths like '/stalker_portal/...' into absolute URLs based on self.base_url.
+        If it's already absolute, return as-is.
+        """
+        if not maybe_url:
+            return ""
+        u = str(maybe_url).strip()
+        if u.lower().startswith(("http://", "https://")):
+            return u
+        # ensure trailing slash so urljoin behaves well
+        base = (self.base_url or "").rstrip("/") + "/"
+        return urljoin(base, u.lstrip("/"))
+
+
     def load_profiles(self):
         self.profiles = self.settings.value("profiles", [])
         if not isinstance(self.profiles, list):
@@ -953,7 +1337,6 @@ class MainWindow(QMainWindow):
 
     def get_playlist(self):
         # **Always Reset Progress to 0 at the Start of Playlist Fetch**
-        # Determine which progress handler to reset based on the type of request
         hostname_input = self.hostname_input.text().strip()
         mac_address = self.mac_input.text().strip()
         media_player = self.media_player_input.text().strip()
@@ -967,29 +1350,51 @@ class MainWindow(QMainWindow):
         self.tabs["Info"]["info_label"].setText("Loading info...")
         self.tabs["Info"]["info_data"] = {}
 
-        
-
         parsed_url = urlparse(hostname_input)
         if not parsed_url.scheme and not parsed_url.netloc:
             parsed_url = urlparse(f"http://{hostname_input}")
         elif not parsed_url.scheme:
             parsed_url = parsed_url._replace(scheme="http")
 
-        self.base_url = urlunparse(
-            (parsed_url.scheme, parsed_url.netloc, "", "", "", "")
-        )
+        self.base_url = urlunparse((parsed_url.scheme, parsed_url.netloc, "", "", "", ""))
         self.mac_address = mac_address
 
-        self.portal = None  # <--- ADD THIS LINE AT THE START!
+        self.portal = None
 
         if "/stalker_portal/" in hostname_input:
             # Stalker portal logic
             try:
+                # ensure a session exists (EPG manager needs one)
+                if self.session is None:
+                    self.session = requests.Session()
+
                 self.portal = StalkerPortal(
                     portal_url=self.base_url,
                     mac=self.mac_address,
-                    progress_callback=self.handle_stalker_progress  # Pass the centralized progress handler
+                    progress_callback=self.handle_stalker_progress
                 )
+
+                # Build or refresh the EPG manager (Stalker)
+                if self.epg is None:
+                    self.epg = EpgManager(
+                        mode="stalker",              # <-- this is the switch
+                        base_url=self.base_url,      # e.g. http://new.gprod.co   (no path is fine)
+                        session=self.session,
+                        mac=self.mac_address,
+                        token_provider=self.make_epg_token_provider(),   # <<< change here
+                        cache_ttl=60.0,
+                        max_items_default=6
+                    )
+                    self.epg.epg_ready.connect(self.on_epg_ready)
+                else:
+                    self.epg.reconfigure(
+                        base_url=self.base_url,
+                        session=self.session,
+                        mac=self.mac_address,
+                        token_provider=self.make_epg_token_provider()    # <<< and here
+
+                    )
+
                 # Initialize and start the StalkerRequestThread
                 self.stalker_thread = StalkerRequestThread(self.portal)
                 self.stalker_thread.stalker_request_complete.connect(self.on_stalker_playlist_received)
@@ -1003,34 +1408,50 @@ class MainWindow(QMainWindow):
                 self.show_error_message(f"Error initializing StalkerPortal: {e}")
                 self.handle_stalker_progress(0)  # Reset progress on error
         else:
-            # Non-stalker logic: use RequestThread
+            # Non-stalker logic
             self.session = requests.Session()
             self.token = get_token(self.session, self.base_url, self.mac_address)
             self.token_timestamp = time.time()
-
-            
 
             if not self.token:
                 QMessageBox.critical(self, "Error", "Failed to retrieve token. Check MAC/URL.")
                 return
 
+            # Build or refresh the EPG manager (Generic)
+            if self.epg is None:
+                self.epg = EpgManager(
+                    mode="generic",
+                    base_url=self.base_url,
+                    session=self.session,
+                    mac=self.mac_address,
+                    token_provider=self._epg_token_provider,
+                    cache_ttl=60.0,
+                    max_items_default=6
+                )
+                self.epg.epg_ready.connect(self.on_epg_ready)
+            else:
+                self.epg.reconfigure(
+                    base_url=self.base_url,
+                    session=self.session,
+                    mac=self.mac_address,
+                    token_provider=self._epg_token_provider
+                )
+
             if (self.current_request_thread is not None and self.current_request_thread.isRunning()):
                 QMessageBox.warning(self, "Warning", "A playlist request is already in progress.")
                 return
-            
 
-            # **Reset non-Stalker progress at the start**
             self.handle_non_stalker_progress(0)
 
             self.request_thread = RequestThread(
                 self.base_url, mac_address, self.session, self.token, num_threads=num_threads,
             )
             self.request_thread.request_complete.connect(self.on_initial_playlist_received)
-
             self.request_thread.update_progress.connect(self.handle_non_stalker_progress)
             self.request_thread.start()
             self.current_request_thread = self.request_thread
             logging.debug("Started RequestThread for playlist (non-stalker).")
+
 
     def on_stalker_playlist_received(self, categories):
         if self.current_stalker_thread != self.sender():
@@ -1222,6 +1643,19 @@ class MainWindow(QMainWindow):
 
 
 
+    def _epg_token_provider(self):
+        """
+        Called by EpgManager to get a fresh token/headers/cookies.
+        """
+        # Refresh token if needed
+        if not self.is_token_valid():
+            self.token = get_token(self.session, self.base_url, self.mac_address)
+            self.token_timestamp = time.time()
+
+        token = self.token or ""
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        cookies = {"token": token} if token else {}
+        return token, headers, cookies
 
 
 
@@ -1297,6 +1731,7 @@ class MainWindow(QMainWindow):
     def update_view_with_search(self, tab_name, filtered_data):
         """
         Updates the QListView of the specified tab with the filtered data.
+        For Live tab, we also wire EPG rows and prefetch EPG for everything in view.
         """
         tab_info = self.tabs.get(tab_name)
         if not tab_info:
@@ -1315,15 +1750,46 @@ class MainWindow(QMainWindow):
             playlist_model.appendRow(go_back_item)
 
         # Add filtered items
-        for item in filtered_data:
-            name = item.get("name") or item.get("title", "Unknown")
+        for obj in filtered_data:
+            name = obj.get("name") or obj.get("title", "Unknown")
             list_item = QStandardItem(name)
-            list_item.setData(item, Qt.UserRole)
-            # Set item_type based on current view
-            item_type = item.get("item_type", "category")  # default to 'category'
-            list_item.setData(item_type, Qt.UserRole + 1)
+            list_item.setData(obj, Qt.UserRole)
+            item_type = obj.get("item_type", "category")
+            list_item.setData(item_type, ROLE_ITEM_TYPE)
             list_item.setIcon(self.get_icon_for_item(item_type))
+
+            # Movies tab (VOD) -> tooltip from JSON
+            if tab_name == "Movies" and item_type == "vod":
+                list_item.setToolTip(self._format_movie_tooltip(obj))
+
+            # Live tab: inline EPG handling
+            if tab_name == "Live" and item_type == "channel":
+                key = self._epg_channel_key(obj)
+                self._epg_row_by_key[key] = list_item
+                existing = list_item.data(ROLE_EPG_TEXT) or "Loading EPG…"
+                list_item.setData(key, ROLE_CHANNEL_KEY)
+                list_item.setData(existing, ROLE_EPG_TEXT)
+                list_item.setText(f"{name}    — {existing}")
+
             playlist_model.appendRow(list_item)
+
+        # Prefetch EPG for visible Live channels (batching for smoothness)
+        if tab_name == "Live":
+            self._prefetch_live_epg_for_current_list(tab_name)
+
+
+
+    def closeEvent(self, event):
+        self.save_settings()
+        try:
+            if self.epg:
+                self.epg.stop()
+        except Exception:
+            pass
+        event.accept()
+
+
+
 
     def retrieve_channels(self, tab_name, category, scroll_position=0):
         tab_info = self.tabs[tab_name]
@@ -1390,6 +1856,11 @@ class MainWindow(QMainWindow):
             self.current_request_thread = self.request_thread
             logging.debug(f"Started RequestThread for channels in category {category_id} (non-stalker).")
 
+
+
+ 
+
+
     def on_channels_loaded(self, tab_name, channels):
         if self.current_request_thread != self.sender():
             logging.debug("Received channels from old thread. Ignoring.")
@@ -1405,24 +1876,106 @@ class MainWindow(QMainWindow):
         tab_info = self.tabs[tab_name]
         playlist_model = tab_info["playlist_model"]
         playlist_view = tab_info["playlist_view"]
+
+        # If we’re about to rebuild Live, stop any ongoing prefetch and clear pending EPG
+        if tab_name == "Live":
+            self._epg_generation += 1  # new generation for this list
+            if self._live_epg_prefetch_timer:
+                try:
+                    self._live_epg_prefetch_timer.stop()
+                    self._live_epg_prefetch_timer.deleteLater()
+                except Exception:
+                    pass
+                self._live_epg_prefetch_timer = None
+            if self.epg and hasattr(self.epg, "cancel_pending"):
+                try:
+                    self.epg.cancel_pending()
+                except Exception:
+                    pass
+            self._epg_row_by_key.clear()
+
         playlist_model.clear()
         tab_info["current_view"] = "channels"
 
-        if tab_info["navigation_stack"]:
+        if tab_info["navigation_stack"] and playlist_model.rowCount() == 0:
             go_back_item = QStandardItem("Go Back")
             go_back_item.setIcon(self.get_icon_for_item("Go Back"))
             playlist_model.appendRow(go_back_item)
 
         for channel in tab_info["current_channels"]:
-            channel_name = channel["name"]
-            list_item = QStandardItem(channel_name)
-            list_item.setData(channel, Qt.UserRole)
+            channel_name = channel.get("name", "Unknown")
+            item = QStandardItem(channel_name)
+            item.setData(channel, Qt.UserRole)
             item_type = channel.get("item_type", "channel")
-            list_item.setData(item_type, Qt.UserRole + 1)
-            list_item.setIcon(self.get_icon_for_item(item_type))
-            playlist_model.appendRow(list_item)
+            item.setData(item_type, ROLE_ITEM_TYPE)
+            item.setIcon(self.get_icon_for_item(item_type))
+
+            # Movies tab (VOD) -> tooltip from JSON on hover
+            if tab_name == "Movies" and item_type == "vod":
+                item.setToolTip(self._format_movie_tooltip(channel))
+
+            if tab_name == "Live" and item_type == "channel":
+                key = self._epg_channel_key(channel)
+                item.setData(key, ROLE_CHANNEL_KEY)
+                item.setData("Loading EPG…", ROLE_EPG_TEXT)
+                self._epg_row_by_key[key] = item
+                item.setText(f"{channel_name}    — Loading EPG…")
+
+            playlist_model.appendRow(item)
+
+        # Prefetch EPG for visible Live channels (batched) for THIS generation only
+        if tab_name == "Live" and tab_info["current_channels"]:
+            self._prefetch_live_epg_for_current_list(tab_name, batch_size=25, interval_ms=10)
 
         QTimer.singleShot(0, lambda: playlist_view.verticalScrollBar().setValue(scroll_position))
+
+
+    def on_current_changed(self, tab_name, current, previous):
+        """
+        Selection change no longer triggers EPG requests.
+        Prefetching now happens automatically when the channel list is shown.
+        """
+        return
+
+ 
+        return ""
+
+    def on_epg_ready(self, key: str, items: list):
+        """
+        Safely update the mapped Live list row with a compact one-liner;
+        keep the full multiline tooltip for hover.
+        """
+        item = self._epg_row_by_key.get(key)
+        if not item:
+            return
+
+        # If the model was rebuilt, the item might be orphaned — guard it
+        try:
+            model = item.model()
+        except Exception:
+            return
+        live_tab = self.tabs.get("Live")
+        if not live_tab or model is not live_tab["playlist_model"]:
+            return
+
+        # Build the one-line inline EPG (Title 3:00 PM – 3:30 PM • ...)
+        one_liner = self._compact_epg_line(items, max_items=3)
+
+        # Update text + tooltip (defensive in case the row disappears mid-update)
+        try:
+            ch = item.data(Qt.UserRole) or {}
+            name = ch.get("name", "Unknown")
+            item.setData(one_liner, ROLE_EPG_TEXT)
+            item.setText(f"{name}    — {one_liner}")
+            try:
+                # Uses your Epg.format_epg_tooltip (already 12h/title-first per your earlier change)
+                item.setToolTip(format_epg_tooltip(items))
+            except Exception:
+                pass
+        except Exception:
+            return
+
+
 
     def on_playlist_selection_changed(self, index):
         sender = self.sender()
@@ -1441,6 +1994,11 @@ class MainWindow(QMainWindow):
         playlist_model = tab_info["playlist_model"]
         playlist_view = tab_info["playlist_view"]
 
+        if tab_name == "Movies":
+            playlist_view.setMouseTracking(True)  # hover events
+            playlist_view.entered.connect(lambda idx, tn=tab_name: self._maybe_update_movie_tooltip_on_hover(tn, idx))
+
+
         if not index.isValid():
             logging.error("Invalid index selected")
             return
@@ -1452,6 +2010,8 @@ class MainWindow(QMainWindow):
 
         # Handle "Go Back" functionality
         if item_text == "Go Back":
+
+            self._stop_live_epg_prefetch()
             if tab_info["navigation_stack"]:
                 nav_state = tab_info["navigation_stack"].pop()
                 tab_info["current_category"] = nav_state["category"]
@@ -1552,6 +2112,91 @@ class MainWindow(QMainWindow):
         else:
             logging.error("Unknown item type")
 
+
+
+
+
+    def _maybe_update_movie_tooltip_on_hover(self, tab_name, idx):
+        """Only build tooltip for real VOD rows; ignore categories and 'Go Back'."""
+        try:
+            if tab_name != "Movies" or not idx.isValid():
+                return
+            tab = self.tabs.get(tab_name)
+            if not tab:
+                return
+            # Do nothing while browsing categories
+            if tab.get("current_view") != "channels":
+                return
+
+            model = tab["playlist_model"]
+            item = model.itemFromIndex(idx)
+            if not item:
+                return
+            if item.text().strip().lower() == "go back":
+                return
+
+            item_type = item.data(ROLE_ITEM_TYPE)
+            if item_type != "vod":
+                return
+
+            m = item.data(Qt.UserRole) or {}
+            # Cache poster locally once
+            if not m.get("_local_poster_path"):
+                img_url = self._best_image_url(m)
+                if img_url:
+                    local = self._poster_local_file(img_url)
+                    if local:
+                        m["_local_poster_path"] = local
+                        item.setData(m, Qt.UserRole)
+
+            item.setToolTip(self._format_movie_tooltip(m))
+        except Exception as e:
+            logging.debug(f"hover(Movies) tooltip skipped: {e}")
+
+
+
+    def _maybe_update_media_tooltip_on_hover(self, tab_name, idx):
+        """Only build tooltip for series/seasons/episodes; ignore categories and 'Go Back'."""
+        try:
+            if tab_name != "Series" or not idx.isValid():
+                return
+            tab = self.tabs.get(tab_name)
+            if not tab:
+                return
+            # Valid views for series tooltips
+            if tab.get("current_view") not in ("channels", "seasons", "episodes"):
+                return
+
+            model = tab["playlist_model"]
+            item = model.itemFromIndex(idx)
+            if not item:
+                return
+            if item.text().strip().lower() == "go back":
+                return
+
+            item_type = item.data(ROLE_ITEM_TYPE)
+            if item_type not in ("series", "season", "episode"):
+                return
+
+            obj = item.data(Qt.UserRole) or {}
+            # Cache poster locally once (supports relative /stalker_portal/ paths)
+            if not obj.get("_local_poster_path"):
+                img_url = self._best_image_url(obj)  # tries screenshot_uri/pic/... and _parent_poster
+                if img_url:
+                    local = self._poster_local_file(img_url)
+                    if local:
+                        obj["_local_poster_path"] = local
+                        item.setData(obj, Qt.UserRole)
+
+            # Reuse movie tooltip builder (title/desc/year look good for shows too)
+            item.setToolTip(self._format_movie_tooltip(obj))
+        except Exception as e:
+            logging.debug(f"hover(Series) tooltip skipped: {e}")
+
+
+
+
+
     def retrieve_series_info(self, tab_name, context_data, season_number=None):
         tab_info = self.tabs[tab_name]
         try:
@@ -1589,25 +2234,27 @@ class MainWindow(QMainWindow):
             series_id = context_data.get("id")
             if not series_id:
                 logging.error(f"Series ID missing in context data: {context_data}")
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    "Series ID is missing.",
-                )
+                QMessageBox.critical(self, "Error", "Series ID is missing.")
                 return
+
+            # NEW: normalize & capture a parent poster once (works for Stalker relative paths too)
+            parent_poster = self._absolute_url(
+                context_data.get("screenshot_uri") or context_data.get("pic") or ""
+            )
 
             if season_number is None:
                 # Fetch seasons
                 all_seasons = []
                 page_number = 0
                 while True:
-                    seasons_url = f"{url}/portal.php?type=series&action=get_ordered_list&movie_id={series_id}&season_id=0&episode_id=0&JsHttpRequest=1-xml&p={page_number}"
+                    seasons_url = (
+                        f"{url}/portal.php?type=series&action=get_ordered_list"
+                        f"&movie_id={series_id}&season_id=0&episode_id=0&JsHttpRequest=1-xml&p={page_number}"
+                    )
                     logging.debug(
                         f"Fetching seasons URL: {seasons_url}, headers: {headers}, cookies: {cookies}"
                     )
-                    response = session.get(
-                        seasons_url, cookies=cookies, headers=headers, timeout=10
-                    )
+                    response = session.get(seasons_url, cookies=cookies, headers=headers, timeout=10)
                     logging.debug(f"Seasons response: {response.text}")
                     if response.status_code == 200:
                         seasons_data = response.json().get("js", {}).get("data", [])
@@ -1617,38 +2264,33 @@ class MainWindow(QMainWindow):
                             # Ensure season_id is a string
                             season_id_raw = season.get("id", "")
                             season_id = str(season_id_raw)
-                            logging.debug(f"Processing season_id: {season_id_raw} (type: {type(season_id_raw)}) converted to string: {season_id}")
+                            logging.debug(
+                                f"Processing season_id: {season_id_raw} (type: {type(season_id_raw)}) converted to string: {season_id}"
+                            )
                             season_number_extracted = None
                             if season_id.startswith("season"):
                                 match = re.match(r"season(\d+)", season_id)
                                 if match:
-                                    season_number_extracted = int(
-                                        match.group(1)
-                                    )
+                                    season_number_extracted = int(match.group(1))
                                 else:
-                                    logging.error(
-                                        f"Unexpected season id format: {season_id}"
-                                    )
+                                    logging.error(f"Unexpected season id format: {season_id}")
                             else:
                                 match = re.match(r"\d+:(\d+)", season_id)
                                 if match:
-                                    season_number_extracted = int(
-                                        match.group(1)
-                                    )
+                                    season_number_extracted = int(match.group(1))
                                 else:
-                                    logging.error(
-                                        f"Unexpected season id format: {season_id}"
-                                    )
+                                    logging.error(f"Unexpected season id format: {season_id}")
 
                             season["season_number"] = season_number_extracted
                             season["item_type"] = "season"
+
+                            # NEW: propagate parent poster so seasons have an image on hover
+                            if parent_poster:
+                                season["_parent_poster"] = parent_poster
+
                         all_seasons.extend(seasons_data)
-                        total_items = response.json().get("js", {}).get(
-                            "total_items", len(all_seasons)
-                        )
-                        logging.debug(
-                            f"Fetched {len(all_seasons)} seasons out of {total_items}."
-                        )
+                        total_items = response.json().get("js", {}).get("total_items", len(all_seasons))
+                        logging.debug(f"Fetched {len(all_seasons)} seasons out of {total_items}.")
                         if len(all_seasons) >= total_items:
                             break
                         page_number += 1
@@ -1660,7 +2302,7 @@ class MainWindow(QMainWindow):
 
                 if all_seasons:
                     # Sort seasons by season_number
-                    all_seasons.sort(key=lambda x: x.get('season_number', 0))
+                    all_seasons.sort(key=lambda x: x.get("season_number", 0))
                     tab_info["current_series_info"] = all_seasons
                     tab_info["current_view"] = "seasons"
                     self.update_series_view(tab_name)
@@ -1669,11 +2311,7 @@ class MainWindow(QMainWindow):
                 series_list = context_data.get("series", [])
                 if not series_list:
                     logging.info("No episodes found in this season.")
-                    QMessageBox.information(
-                        self,
-                        "Info",
-                        "No episodes found in this season.",
-                    )
+                    QMessageBox.information(self, "Info", "No episodes found in this season.")
                     return
 
                 logging.debug(f"Series episodes found: {series_list}")
@@ -1688,12 +2326,17 @@ class MainWindow(QMainWindow):
                         "item_type": "episode",
                         "cmd": context_data.get("cmd"),
                     }
+
+                    # NEW: propagate parent poster so episodes have an image on hover
+                    if parent_poster:
+                        episode["_parent_poster"] = parent_poster
+
                     logging.debug(f"Episode details: {episode}")
                     all_episodes.append(episode)
 
                 if all_episodes:
                     # Sort episodes by episode_number in ascending order
-                    all_episodes.sort(key=lambda x: x.get('episode_number', 0))
+                    all_episodes.sort(key=lambda x: x.get("episode_number", 0))
                     tab_info["current_series_info"] = all_episodes
                     tab_info["current_view"] = "episodes"
                     self.update_series_view(tab_name)
@@ -1703,9 +2346,15 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logging.error(f"Error retrieving series info: {str(e)}")
 
+
     def stalker_retrieve_series_info(self, tab_name, context_data, season_number=None):
         tab_info = self.tabs[tab_name]
         hostname_input = self.hostname_input.text().strip()
+
+        # Compute a parent poster once (handles Stalker relative paths too)
+        parent_poster = self._absolute_url(
+            context_data.get("screenshot_uri") or context_data.get("pic") or ""
+        )
 
         if "/stalker_portal/" in hostname_input and self.portal:
             # **Stalker Portal Logic**
@@ -1716,11 +2365,7 @@ class MainWindow(QMainWindow):
                     season_id = context_data.get("season_id")
                     if not series_id or not season_id:
                         logging.error(f"Series ID or Season ID missing in context data: {context_data}")
-                        QMessageBox.critical(
-                            self,
-                            "Error",
-                            "Series ID or Season ID is missing.",
-                        )
+                        QMessageBox.critical(self, "Error", "Series ID or Season ID is missing.")
                         return
 
                     episodes = self.portal.fetch_episode_pages(movie_id=series_id, season_id=season_id)
@@ -1728,201 +2373,191 @@ class MainWindow(QMainWindow):
                         # Process and sort episodes
                         processed_episodes = self.process_and_sort_episodes(episodes)
 
+                        # NEW: propagate parent poster to each episode
+                        if parent_poster:
+                            for e in processed_episodes:
+                                if isinstance(e, dict):
+                                    e.setdefault("_parent_poster", parent_poster)
+                                    # mark type if missing
+                                    e.setdefault("item_type", "episode")
+
                         tab_info["current_series_info"] = processed_episodes
+                        tab_info["current_view"] = "episodes"  # ensure correct view
                         self.update_series_view(tab_name)
                     else:
                         logging.warning("No episodes found for the selected season.")
-                        QMessageBox.information(
-                            self,
-                            "Info",
-                            "No episodes found for the selected season.",
-                        )
+                        QMessageBox.information(self, "Info", "No episodes found for the selected season.")
                 else:
                     # Fetch seasons using StalkerPortal
                     series_id = context_data.get("movie_id") or context_data.get("id")
                     if not series_id:
                         logging.error(f"Series ID missing in context data: {context_data}")
-                        QMessageBox.critical(
-                            self,
-                            "Error",
-                            "Series ID is missing.",
-                        )
+                        QMessageBox.critical(self, "Error", "Series ID is missing.")
                         return
 
                     seasons = self.portal.get_seasons(series_id)
                     if seasons:
-                        # Assume seasons is a list of dictionaries with 'id' and 'name'
-                        # Process seasons if necessary (e.g., sorting)
+                        # NEW: propagate parent poster + mark type
+                        if parent_poster:
+                            for s in seasons:
+                                if isinstance(s, dict):
+                                    s.setdefault("_parent_poster", parent_poster)
+                                    s.setdefault("item_type", "season")
+
+                        # Optional: sort if there's a numeric season number field
+                        try:
+                            seasons.sort(key=lambda x: x.get("season_number", 0) if isinstance(x, dict) else 0)
+                        except Exception:
+                            pass
+
                         tab_info["current_series_info"] = seasons
                         tab_info["current_view"] = "seasons"
                         self.update_series_view(tab_name)
                     else:
                         logging.warning("No seasons found for the selected series.")
-                        QMessageBox.information(
-                            self,
-                            "Info",
-                            "No seasons found for the selected series.",
-                        )
+                        QMessageBox.information(self, "Info", "No seasons found for the selected series.")
             except Exception as e:
                 logging.error(f"Error retrieving series info from Stalker portal: {e}")
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to retrieve series information: {e}",
-                )
-        else:
-            # **Non-Stalker Portal Logic (Existing Implementation)**
-            try:
-                session = self.session
-                url = self.base_url
-                mac_address = self.mac_address
+                QMessageBox.critical(self, "Error", f"Failed to retrieve series information: {e}")
+            return
 
-                # Check if token is still valid
-                if not self.is_token_valid():
-                    self.token = get_token(session, url, mac_address)
-                    self.token_timestamp = time.time()
-                    if not self.token:
-                        QMessageBox.critical(
-                            self,
-                            "Error",
-                            "Failed to retrieve token. Please check your MAC address and URL.",
-                        )
-                        return
+        # **Non-Stalker Portal Logic (Existing Implementation)**
+        try:
+            session = self.session
+            url = self.base_url
+            mac_address = self.mac_address
 
-                token = self.token
-
-                cookies = {
-                    "mac": mac_address,
-                    "stb_lang": "en",
-                    "timezone": "Europe/London",
-                    "token": token,
-                }
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
-                                  "AppleWebKit/533.3 (KHTML, like Gecko) "
-                                  "MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
-                    "Authorization": f"Bearer {token}",
-                }
-
-                series_id = context_data.get("id")
-                if not series_id:
-                    logging.error(f"Series ID missing in context data: {context_data}")
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        "Series ID is missing.",
-                    )
+            # Check if token is still valid
+            if not self.is_token_valid():
+                self.token = get_token(session, url, mac_address)
+                self.token_timestamp = time.time()
+                if not self.token:
+                    QMessageBox.critical(self, "Error",
+                                         "Failed to retrieve token. Please check your MAC address and URL.")
                     return
 
-                if season_number is None:
-                    # Fetch seasons
-                    all_seasons = []
-                    page_number = 0
-                    while True:
-                        seasons_url = f"{url}/portal.php?type=series&action=get_ordered_list&movie_id={series_id}&season_id=0&episode_id=0&JsHttpRequest=1-xml&p={page_number}"
-                        logging.debug(
-                            f"Fetching seasons URL: {seasons_url}, headers: {headers}, cookies: {cookies}"
-                        )
-                        response = session.get(
-                            seasons_url, cookies=cookies, headers=headers, timeout=10
-                        )
-                        logging.debug(f"Seasons response: {response.text}")
-                        if response.status_code == 200:
-                            seasons_data = response.json().get("js", {}).get("data", [])
-                            if not seasons_data:
-                                break
-                            for season in seasons_data:
-                                # Ensure season_id is a string
-                                season_id_raw = season.get("id", "")
-                                season_id = str(season_id_raw)
-                                logging.debug(f"Processing season_id: {season_id_raw} (type: {type(season_id_raw)}) converted to string: {season_id}")
-                                season_number_extracted = None
-                                if season_id.startswith("season"):
-                                    match = re.match(r"season(\d+)", season_id)
-                                    if match:
-                                        season_number_extracted = int(
-                                            match.group(1)
-                                        )
-                                    else:
-                                        logging.error(
-                                            f"Unexpected season id format: {season_id}"
-                                        )
-                                else:
-                                    match = re.match(r"\d+:(\d+)", season_id)
-                                    if match:
-                                        season_number_extracted = int(
-                                            match.group(1)
-                                        )
-                                    else:
-                                        logging.error(
-                                            f"Unexpected season id format: {season_id}"
-                                        )
+            token = self.token
 
-                                season["season_number"] = season_number_extracted
-                                season["item_type"] = "season"
-                            all_seasons.extend(seasons_data)
-                            total_items = response.json().get("js", {}).get(
-                                "total_items", len(all_seasons)
-                            )
-                            logging.debug(
-                                f"Fetched {len(all_seasons)} seasons out of {total_items}."
-                            )
-                            if len(all_seasons) >= total_items:
-                                break
-                            page_number += 1
-                        else:
-                            logging.error(
-                                f"Failed to fetch seasons for page {page_number} with status code {response.status_code}"
-                            )
+            cookies = {
+                "mac": mac_address,
+                "stb_lang": "en",
+                "timezone": "Europe/London",
+                "token": token,
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) "
+                              "AppleWebKit/533.3 (KHTML, like Gecko) "
+                              "MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
+                "Authorization": f"Bearer {token}",
+            }
+
+            series_id = context_data.get("id")
+            if not series_id:
+                logging.error(f"Series ID missing in context data: {context_data}")
+                QMessageBox.critical(self, "Error", "Series ID is missing.")
+                return
+
+            if season_number is None:
+                # Fetch seasons
+                all_seasons = []
+                page_number = 0
+                while True:
+                    seasons_url = (
+                        f"{url}/portal.php?type=series&action=get_ordered_list"
+                        f"&movie_id={series_id}&season_id=0&episode_id=0&JsHttpRequest=1-xml&p={page_number}"
+                    )
+                    logging.debug(f"Fetching seasons URL: {seasons_url}, headers: {headers}, cookies: {cookies}")
+                    response = session.get(seasons_url, cookies=cookies, headers=headers, timeout=10)
+                    logging.debug(f"Seasons response: {response.text}")
+                    if response.status_code == 200:
+                        seasons_data = response.json().get("js", {}).get("data", [])
+                        if not seasons_data:
                             break
+                        for season in seasons_data:
+                            # Ensure season_id is a string
+                            season_id_raw = season.get("id", "")
+                            season_id = str(season_id_raw)
+                            logging.debug(f"Processing season_id: {season_id_raw} (type: {type(season_id_raw)}) converted to string: {season_id}")
+                            season_number_extracted = None
+                            if season_id.startswith("season"):
+                                match = re.match(r"season(\d+)", season_id)
+                                if match:
+                                    season_number_extracted = int(match.group(1))
+                                else:
+                                    logging.error(f"Unexpected season id format: {season_id}")
+                            else:
+                                match = re.match(r"\d+:(\d+)", season_id)
+                                if match:
+                                    season_number_extracted = int(match.group(1))
+                                else:
+                                    logging.error(f"Unexpected season id format: {season_id}")
 
-                    if all_seasons:
-                        # Sort seasons by season_number
-                        all_seasons.sort(key=lambda x: x.get('season_number', 0))
-                        tab_info["current_series_info"] = all_seasons
-                        tab_info["current_view"] = "seasons"
-                        self.update_series_view(tab_name)
-                else:
-                    # Fetch episodes for the given season
-                    series_list = context_data.get("series", [])
-                    if not series_list:
-                        logging.info("No episodes found in this season.")
-                        QMessageBox.information(
-                            self,
-                            "Info",
-                            "No episodes found in this season.",
-                        )
-                        return
+                            season["season_number"] = season_number_extracted
+                            season["item_type"] = "season"
 
-                    logging.debug(f"Series episodes found: {series_list}")
-                    all_episodes = []
-                    for episode_number in series_list:
-                        episode = {
-                            "id": f"{series_id}:{episode_number}",
-                            "series_id": series_id,
-                            "season_number": season_number,
-                            "episode_number": episode_number,
-                            "name": f"Episode {episode_number}",
-                            "item_type": "episode",
-                            "cmd": context_data.get("cmd"),
-                        }
-                        logging.debug(f"Episode details: {episode}")
-                        all_episodes.append(episode)
+                            # NEW: propagate parent poster so seasons have an image on hover
+                            if parent_poster:
+                                season.setdefault("_parent_poster", parent_poster)
 
-                    if all_episodes:
-                        # Process and sort episodes
-                        processed_episodes = self.process_and_sort_episodes(all_episodes)
-
-                        tab_info["current_series_info"] = processed_episodes
-                        tab_info["current_view"] = "episodes"
-                        self.update_series_view(tab_name)
+                        all_seasons.extend(seasons_data)
+                        total_items = response.json().get("js", {}).get("total_items", len(all_seasons))
+                        logging.debug(f"Fetched {len(all_seasons)} seasons out of {total_items}.")
+                        if len(all_seasons) >= total_items:
+                            break
+                        page_number += 1
                     else:
-                        logging.info("No episodes found.")
+                        logging.error(f"Failed to fetch seasons for page {page_number} with status code {response.status_code}")
+                        break
 
-            except KeyError as e:
-                logging.error(f"KeyError retrieving series info: {str(e)}")
-            except Exception as e:
-                logging.error(f"Error retrieving series info: {str(e)}")
+                if all_seasons:
+                    # Sort seasons by season_number
+                    all_seasons.sort(key=lambda x: x.get('season_number', 0))
+                    tab_info["current_series_info"] = all_seasons
+                    tab_info["current_view"] = "seasons"
+                    self.update_series_view(tab_name)
+            else:
+                # Fetch episodes for the given season
+                series_list = context_data.get("series", [])
+                if not series_list:
+                    logging.info("No episodes found in this season.")
+                    QMessageBox.information(self, "Info", "No episodes found in this season.")
+                    return
+
+                logging.debug(f"Series episodes found: {series_list}")
+                all_episodes = []
+                for episode_number in series_list:
+                    episode = {
+                        "id": f"{series_id}:{episode_number}",
+                        "series_id": series_id,
+                        "season_number": season_number,
+                        "episode_number": episode_number,
+                        "name": f"Episode {episode_number}",
+                        "item_type": "episode",
+                        "cmd": context_data.get("cmd"),
+                    }
+
+                    # NEW: propagate parent poster so episodes have an image on hover
+                    if parent_poster:
+                        episode.setdefault("_parent_poster", parent_poster)
+
+                    logging.debug(f"Episode details: {episode}")
+                    all_episodes.append(episode)
+
+                if all_episodes:
+                    # Process and sort episodes (keep your existing utility)
+                    processed_episodes = self.process_and_sort_episodes(all_episodes)
+
+                    tab_info["current_series_info"] = processed_episodes
+                    tab_info["current_view"] = "episodes"
+                    self.update_series_view(tab_name)
+                else:
+                    logging.info("No episodes found.")
+
+        except KeyError as e:
+            logging.error(f"KeyError retrieving series info: {str(e)}")
+        except Exception as e:
+            logging.error(f"Error retrieving series info: {str(e)}")
+
 
     def process_and_sort_episodes(self, episodes):
         """
@@ -1961,6 +2596,30 @@ class MainWindow(QMainWindow):
         if self.token and (time.time() - self.token_timestamp) < 600:
             return True
         return False
+
+    def make_epg_token_provider(self):
+        def provider():
+            # If we have a StalkerPortal, try to use its token/cookies first
+            if getattr(self, "portal", None):
+                try:
+                    token = getattr(self.portal, "token", None)
+                    if token:
+                        return token, {"Authorization": f"Bearer {token}"}, {"token": token}
+                except Exception:
+                    pass
+            # Fallback to the normal reuse/refresh path
+            if not self.session:
+                self.session = requests.Session()
+            if not self.is_token_valid():
+                try:
+                    self.token = get_token(self.session, self.base_url, self.mac_address)
+                    self.token_timestamp = time.time()
+                except Exception as e:
+                    logging.debug(f"EPG token refresh failed (non-fatal): {e}")
+            token = self.token or ""
+            return token, ({"Authorization": f"Bearer {token}"} if token else {}), ({"token": token} if token else {})
+        return provider
+
 
     def play_channel(self, channel):
         """
@@ -2244,8 +2903,30 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         pass
 
-    # Additional Methods (as per the original code)
-    # Ensure to implement any missing methods or fix incomplete code blocks
+    def _stop_live_epg_prefetch(self):
+        """Stop timer, bump generation, clear mapping, and drop queued EPG fetches."""
+        # bump generation so any in-flight timer ticks become no-ops
+        self._epg_generation += 1
+
+        # stop batch timer
+        if getattr(self, "_live_epg_prefetch_timer", None):
+            try:
+                self._live_epg_prefetch_timer.stop()
+                self._live_epg_prefetch_timer.deleteLater()
+            except Exception:
+                pass
+            self._live_epg_prefetch_timer = None
+
+        # clear queued network work (if supported by EpgManager)
+        if self.epg and hasattr(self.epg, "cancel_pending"):
+            try:
+                self.epg.cancel_pending()
+            except Exception:
+                pass
+
+        # nothing to update anymore
+        self._epg_row_by_key.clear()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
