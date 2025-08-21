@@ -25,12 +25,9 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install "pyinstaller>=6.10"
 
-      - name: Build .app with PyInstaller (exclude QtBluetooth)
+      - name: Build .app with PyInstaller
         run: |
-          pyinstaller --clean --noconfirm --name "IPTV-MAC-STALKER-PLAYER" --windowed \
-            --collect-submodules PyQt6 --collect-data PyQt6 \
-            --exclude-module PyQt6.QtBluetooth \
-            "STALKER PLAYER.py"
+          pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
 
       - name: Upload macOS .app artifact
         uses: actions/upload-artifact@v4
