@@ -23,24 +23,51 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
-      - name: Build .app with PyInstaller
+      - name: Build binary with PyInstaller
         run: |
-          pyinstaller --noconfirm --name "IPTV-MAC-STALKER-PLAYER" --windowed \
+          pyinstaller --noconfirm --onefile --name "IPTV-MAC-STALKER-PLAYER" --windowed \
             --collect-submodules PyQt6 --collect-data PyQt6 \
-            --collect-submodules PyQt5 --collect-data PyQt5 \
             --collect-submodules telethon --collect-data telethon \
             "STALKER PLAYER.py"
 
+      - name: Create .app bundle manually
+        run: |
+          mkdir -p IPTV-MAC-STALKER-PLAYER.app/Contents/MacOS
+          mkdir -p IPTV-MAC-STALKER-PLAYER.app/Contents/Resources
+
+          # Copy the PyInstaller binary into the app bundle
+          cp dist/IPTV-MAC-STALKER-PLAYER IPTV-MAC-STALKER-PLAYER.app/Contents/MacOS/IPTV-MAC-STALKER-PLAYER
+
+          # Create Info.plist
+          cat > IPTV-MAC-STALKER-PLAYER.app/Contents/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+            <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+            <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
+            <key>CFBundleIdentifier</key><string>com.github.iptv.stalker</string>
+            <key>CFBundleVersion</key><string>1.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>10.14</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSPrincipalClass</key><string>NSApplication</string>
+          </dict>
+          </plist>
+          EOF
+
       - name: Ad-hoc sign (not notarized)
         run: |
-          /usr/bin/codesign --force --deep --sign - "dist/IPTV-MAC-STALKER-PLAYER.app" || true
+          /usr/bin/codesign --force --deep --sign - "IPTV-MAC-STALKER-PLAYER.app" || true
 
       - name: Zip the .app
         run: |
-          cd dist && zip -r IPTV-MAC-STALKER-PLAYER-mac.zip "IPTV-MAC-STALKER-PLAYER.app"
+          zip -r IPTV-MAC-STALKER-PLAYER-mac.zip "IPTV-MAC-STALKER-PLAYER.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: IPTV-MAC-STALKER-PLAYER-mac
-          path: dist/IPTV-MAC-STALKER-PLAYER-mac.zip
+          path: IPTV-MAC-STALKER-PLAYER-mac.zip
