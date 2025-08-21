@@ -1,7 +1,7 @@
-name: Build macOS App (DMG)
+name: Build macOS .dmg
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # manual trigger
   push:
     tags:
       - 'v*'
@@ -9,6 +9,7 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,100 +21,40 @@ jobs:
 
       - name: Install dependencies
         run: |
-          set -euxo pipefail
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
-      - name: Build with PyInstaller (.spec)
+      - name: Build macOS .app with PyInstaller
         run: |
           set -euxo pipefail
-          pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
-          echo "DIST CONTENTS:"
+          pyinstaller --clean --noconfirm \
+            --collect-all PyQt6 \
+            --exclude-module PyQt6.QtBluetooth \
+            IPTV-MAC-STALKER-PLAYER.spec
+
+          echo "[+] Build complete. Dist contents:"
           ls -la dist
 
-      # Normalize to .app regardless of PyInstaller output shape
-      - name: Normalize to .app bundle
+      - name: Inspect .app size
         run: |
-          set -euxo pipefail
-          APP_NAME="IPTV-MAC-STALKER-PLAYER"
-          DIST_DIR="dist"
-          APP_DIR="$DIST_DIR/${APP_NAME}.app"
-          FOLDER_DIR="$DIST_DIR/${APP_NAME}"
+          du -sh dist/IPTV-MAC-STALKER-PLAYER.app || true
+          find dist/IPTV-MAC-STALKER-PLAYER.app/Contents/Frameworks -maxdepth 1 -type d || true
 
-          if [ -d "$APP_DIR" ]; then
-            echo "[+] Found .app already: $APP_DIR"
-          else
-            echo "[i] .app not found; checking for folder build at $FOLDER_DIR"
-            if [ ! -d "$FOLDER_DIR" ]; then
-              echo "[!] Neither $APP_DIR nor $FOLDER_DIR exists"; exit 1
-            fi
-
-            echo "[+] Wrapping folder build into a .app"
-            rm -rf "$APP_DIR"
-            mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-
-            # Prefer a binary named like the app; else first executable file
-            if [ -f "$FOLDER_DIR/$APP_NAME" ]; then
-              BIN_PATH="$FOLDER_DIR/$APP_NAME"
-            else
-              BIN_PATH="$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm -111 | head -n1 || true)"
-              if [ -z "${BIN_PATH:-}" ]; then
-                echo "[!] Could not locate an executable in $FOLDER_DIR"; exit 1
-              fi
-            fi
-
-            cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
-            chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
-
-            # Create Info.plist using PlistBuddy to avoid heredoc issues
-            PLIST="$APP_DIR/Contents/Info.plist"
-            /usr/libexec/PlistBuddy -c "Clear dict" "$PLIST" || true
-            /usr/libexec/PlistBuddy -c "Add :CFBundleName string $APP_NAME" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string $APP_NAME" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.github.iptv.mac.stalker.player" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.0" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 10.14" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST"
-            /usr/libexec/PlistBuddy -c "Add :NSPrincipalClass string NSApplication" "$PLIST"
-          fi
-
-          echo "FINAL_APP_PATH=$APP_DIR" >> "$GITHUB_ENV"
-          echo "[+] Final .app at: $APP_DIR"
-          ls -la "$APP_DIR"
-
-      - name: Ad-hoc sign (not notarized)
+      - name: Create DMG
         run: |
-          set -euxo pipefail
-          /usr/bin/codesign --force --deep --sign - "$FINAL_APP_PATH" || true
+          APP="dist/IPTV-MAC-STALKER-PLAYER.app"
+          DMG="dist/IPTV-MAC-STALKER-PLAYER.dmg"
 
-      - name: Create DMG (with Applications alias)
-        run: |
-          set -euxo pipefail
-          rm -rf dmg && mkdir -p dmg
-          cp -R "$FINAL_APP_PATH" dmg/
-          ln -sf /Applications dmg/Applications
           hdiutil create -volname "IPTV-MAC-STALKER-PLAYER" \
-            -srcfolder dmg \
-            -ov -fs HFS+ -format UDZO \
-            "IPTV-MAC-STALKER-PLAYER.dmg"
+            -srcfolder "$APP" \
+            -ov -format UDZO "$DMG"
+
+          echo "[+] Built DMG:"
+          ls -lh "$DMG"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: IPTV-MAC-STALKER-PLAYER-dmg
-          path: IPTV-MAC-STALKER-PLAYER.dmg
-
-      - name: Zip .app (Windows-friendly)
-        run: |
-          set -euxo pipefail
-          zip -r IPTV-MAC-STALKER-PLAYER-app.zip "$FINAL_APP_PATH"
-
-      - name: Upload zipped .app
-        uses: actions/upload-artifact@v4
-        with:
-          name: IPTV-MAC-STALKER-PLAYER-app
-          path: IPTV-MAC-STALKER-PLAYER-app.zip
+          name: IPTV-MAC-STALKER-PLAYER-macOS
+          path: dist/IPTV-MAC-STALKER-PLAYER.dmg
