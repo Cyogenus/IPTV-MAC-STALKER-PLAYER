@@ -21,11 +21,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pyinstaller
+          pip install "pyinstaller>=6.10"
+
 
       - name: Build .app with PyInstaller
         run: |
-          pyinstaller --noconfirm --name "IPTV-MAC-STALKER-PLAYER" --windowed \
+          pyinstaller --clean --noconfirm --name "IPTV-MAC-STALKER-PLAYER" --windowed \
             --collect-submodules PyQt6 --collect-data PyQt6 \
             "STALKER PLAYER.py"
 
