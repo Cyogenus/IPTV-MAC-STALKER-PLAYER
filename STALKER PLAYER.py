@@ -11,15 +11,15 @@ import qdarkstyle
 from urllib.parse import quote, urlparse, urlunparse, urljoin
 import os
 import hashlib
-from PyQt5.QtCore import QUrl, QTemporaryDir
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt6.QtCore import QUrl, QTemporaryDir
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 
 import concurrent.futures  # Added for parallel execution
 from datetime import datetime
 from Epg import EpgManager, format_epg_tooltip
 
 from stalker import StalkerPortal
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     QSettings,
     Qt,
     QThread,
@@ -27,7 +27,7 @@ from PyQt5.QtCore import (
     QTimer,  # Changed from QPropertyAnimation
     QCoreApplication,
 )
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QMessageBox,
     QLabel,
     QMainWindow,
@@ -50,7 +50,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QStyle,
 )
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon
 from urllib.parse import quote, urlparse, urlunparse
 
 # Remove existing handlers
@@ -1091,7 +1091,7 @@ class MainWindow(QMainWindow):
 
     def apply_dark_theme(self):
         # Load and customize qdarkstyle's stylesheet
-        qss = qdarkstyle.load_stylesheet(qt_api='pyqt5')
+        qss = qdarkstyle.load_stylesheet(qt_api='pyqt6')
         qss = (
             qss
             .replace('#232629', '#1b2332')      # Main background to dark blue-gray
@@ -2934,3 +2934,4 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+
