@@ -1,10 +1,10 @@
-name: Build macOS App
+name: Build macOS GUI App
 
 on:
-  workflow_dispatch:   # manual run
   push:
-    branches:
-      - main
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   build-macos:
@@ -14,23 +14,43 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install Qt
+        run: brew install qt
 
-      - name: Install dependencies
+      - name: Compile with Qt
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pyinstaller
+          /opt/homebrew/opt/qt/bin/qmake -project
+          /opt/homebrew/opt/qt/bin/qmake
+          make
 
-      - name: Build .app with PyInstaller
+      - name: Create .app bundle
         run: |
-          pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
+          mkdir -p MyApp.app/Contents/MacOS
+          mkdir -p MyApp.app/Contents/Resources
 
-      - name: Upload built app
+          cp your-repo MyApp.app/Contents/MacOS/MyApp  # binary
+          
+          cat > MyApp.app/Contents/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>MyApp</string>
+            <key>CFBundleDisplayName</key><string>MyApp</string>
+            <key>CFBundleExecutable</key><string>MyApp</string>
+            <key>CFBundleIdentifier</key><string>com.github.myapp</string>
+            <key>CFBundleVersion</key><string>1.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>10.14</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSPrincipalClass</key><string>NSApplication</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Upload .app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: IPTV-MAC-STALKER-PLAYER-macOS
-          path: dist/IPTV-MAC-STALKER-PLAYER
+          name: MyApp-macOS
+          path: MyApp.app
