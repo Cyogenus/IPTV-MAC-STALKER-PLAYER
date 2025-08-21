@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-      uses: actions/setup-python@v5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -25,14 +25,14 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
-      - name: Build with PyInstaller (spec)
+      - name: Build with PyInstaller (.spec)
         run: |
           pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
           echo "DIST CONTENTS:"
           ls -la dist
 
-      # Normalize to a .app bundle (handle both outputs)
-      - name: Normalize bundle to .app
+      # Handles both outputs: dist/<Name>.app OR dist/<Name> (folder)
+      - name: Normalize to .app bundle
         run: |
           set -e
           APP_NAME="IPTV-MAC-STALKER-PLAYER"
@@ -52,21 +52,19 @@ jobs:
             rm -rf "$APP_DIR"
             mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-            # Pick the main executable (same name as app)
+            # Prefer binary with same name as app; otherwise pick first executable
             if [ -f "$FOLDER_DIR/$APP_NAME" ]; then
               BIN_PATH="$FOLDER_DIR/$APP_NAME"
             else
-              # fallback: first executable in folder
               BIN_PATH=$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm +111 | head -n1)
               if [ -z "$BIN_PATH" ]; then
-                echo "[!] Could not locate built binary in $FOLDER_DIR"; exit 1
+                echo "[!] Could not locate an executable in $FOLDER_DIR"; exit 1
               fi
             fi
 
             cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
             chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
-            # Minimal Info.plist
             cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -88,16 +86,15 @@ jobs:
             EOF
           fi
 
-          echo "[+] Final .app:"
+          echo "FINAL_APP_PATH=$APP_DIR" >> "$GITHUB_ENV"
+          echo "[+] Final .app at: $APP_DIR"
           ls -la "$APP_DIR"
-          # Save for later steps
-          echo "FINAL_APP_PATH=$APP_DIR" >> $GITHUB_ENV
 
       - name: Ad-hoc sign (not notarized)
         run: |
           /usr/bin/codesign --force --deep --sign - "$FINAL_APP_PATH" || true
 
-      - name: Create DMG
+      - name: Create DMG (with Applications alias)
         run: |
           rm -rf dmg && mkdir -p dmg
           cp -R "$FINAL_APP_PATH" dmg/
