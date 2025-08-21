@@ -1,20 +1,22 @@
-# -*- mode: python ; coding: utf-8 -*-
-import os, shutil
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+# IPTV-MAC-STALKER-PLAYER.spec
+# Custom PyInstaller spec for IPTV-MAC-STALKER-PLAYER
+# Excludes unused Qt modules like Bluetooth to prevent Mac build errors
 
 block_cipher = None
 
 a = Analysis(
-    ['STALKER PLAYER.py'],
+    ['STALKER PLAYER.py'],   # 👈 replace with your main script name if different
     pathex=[],
     binaries=[],
-    datas=collect_data_files("PyQt6"),
-    hiddenimports=collect_submodules("PyQt6"),
+    datas=[],
+    hiddenimports=[],
     hookspath=[],
+    excludes=[
+        'PyQt6.QtBluetooth',     # 🚫 exclude Bluetooth
+        'PyQt6.QtMultimedia',    # 🚫 exclude Multimedia
+        'PyQt6.QtPositioning',   # 🚫 exclude Positioning
+    ],
     runtime_hooks=[],
-    excludes=['PyQt6.QtBluetooth'],  # exclude at analysis
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
     cipher=block_cipher,
 )
 
@@ -30,23 +32,8 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=True,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    console=False,   # set True if you want a terminal window
 )
-
-# --- PRE-COLLECT CLEANUP ---
-def nuke_bluetooth_build():
-    build_path = os.path.join("build", "IPTV-MAC-STALKER-PLAYER")
-    for root, dirs, _ in os.walk(build_path):
-        for d in dirs:
-            if "QtBluetooth.framework" in d:
-                shutil.rmtree(os.path.join(root, d), ignore_errors=True)
-
-nuke_bluetooth_build()
 
 coll = COLLECT(
     exe,
@@ -56,13 +43,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='IPTV-MAC-STALKER-PLAYER'
+    name='IPTV-MAC-STALKER-PLAYER',
 )
-
-# --- POST-COLLECT CLEANUP ---
-def nuke_bluetooth_dist():
-    bt_path = os.path.join("dist", "IPTV-MAC-STALKER-PLAYER", "_internal", "PyQt6", "Qt6", "lib", "QtBluetooth.framework")
-    if os.path.exists(bt_path):
-        shutil.rmtree(bt_path, ignore_errors=True)
-
-nuke_bluetooth_dist()
