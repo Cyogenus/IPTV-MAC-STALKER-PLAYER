@@ -1,4 +1,4 @@
-name: macOS Build
+name: Build macOS App
 
 on:
   push:
@@ -7,17 +7,17 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-macos:
+  build:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
@@ -25,18 +25,15 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install "pyinstaller>=6.10"
 
-      - name: Build .app with PyInstaller
+      - name: Build .app with PyInstaller (exclude QtBluetooth)
         run: |
-          pyinstaller --clean --noconfirm \
-            --name "IPTV-MAC-STALKER-PLAYER" \
-            --windowed \
-            --collect-submodules PyQt6 \
-            --collect-data PyQt6 \
+          pyinstaller --clean --noconfirm --name "IPTV-MAC-STALKER-PLAYER" --windowed \
+            --collect-submodules PyQt6 --collect-data PyQt6 \
             --exclude-module PyQt6.QtBluetooth \
             "STALKER PLAYER.py"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
+      - name: Upload macOS .app artifact
+        uses: actions/upload-artifact@v4
         with:
           name: IPTV-MAC-STALKER-PLAYER-macOS
-          path: dist/IPTV-MAC-STALKER-PLAYER
+          path: dist/IPTV-MAC-STALKER-PLAYER.app
