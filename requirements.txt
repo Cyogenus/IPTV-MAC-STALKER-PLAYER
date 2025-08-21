@@ -1,4 +1,3 @@
-PyQt5>=5.15.10
 PyQt6>=6.6
 requests>=2.31.0
 qdarkstyle>=3.1
