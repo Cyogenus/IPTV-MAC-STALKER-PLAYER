@@ -33,30 +33,32 @@ jobs:
           echo "[+] Build complete. Dist contents:"
           ls -la dist
 
-
       - name: Inspect .app size
         run: |
-          du -sh dist/IPTV-MAC-STALKER-PLAYER.app || true
-          find dist/IPTV-MAC-STALKER-PLAYER.app/Contents/Frameworks -maxdepth 1 -type d || true
+          du -sh dist/*.app || true
+          find dist -name "*.app" -maxdepth 1 || true
+          find dist -type d -maxdepth 3
 
       - name: Create DMG
         run: |
           set -euxo pipefail
-          APP_DIR="dist/IPTV-MAC-STALKER-PLAYER.app"
+          APP_DIR=$(find dist -maxdepth 1 -name "*.app" | head -n 1)
           DMG="dist/IPTV-MAC-STALKER-PLAYER.dmg"
-      
-          if [ ! -d "$APP_DIR" ]; then
-            echo "❌ ERROR: $APP_DIR not found!"
+
+          if [ -z "$APP_DIR" ]; then
+            echo "❌ ERROR: No .app bundle found in dist/"
             exit 1
           fi
-      
+
+          echo "[+] Found app: $APP_DIR"
+
           hdiutil create -volname "IPTV-MAC-STALKER-PLAYER" \
             -srcfolder "$APP_DIR" \
             -ov -format UDZO "$DMG"
-      
+
           echo "[+] Built DMG:"
           ls -lh "$DMG"
-      
+
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
