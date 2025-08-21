@@ -1,46 +1,59 @@
-name: Build macOS GUI App
+name: macOS .app build (with DMG)
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags:
+      - 'v*'
 
 jobs:
   build-macos:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Qt
-        run: brew install qt
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Compile with Qt
+      - name: Install deps
         run: |
-          /opt/homebrew/opt/qt/bin/qmake -project
-          /opt/homebrew/opt/qt/bin/qmake
-          make
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pyinstaller
 
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --noconfirm --name "IPTV-MAC-STALKER-PLAYER" --windowed \
+            --collect-submodules PyQt6 --collect-data PyQt6 \
+            "STALKER PLAYER.py"
+
+      # Build a clean .app bundle manually (so Finder sees it as an app)
       - name: Create .app bundle
         run: |
-          mkdir -p MyApp.app/Contents/MacOS
-          mkdir -p MyApp.app/Contents/Resources
+          rm -rf IPTV-MAC-STALKER-PLAYER.app
+          mkdir -p IPTV-MAC-STALKER-PLAYER.app/Contents/MacOS
+          mkdir -p IPTV-MAC-STALKER-PLAYER.app/Contents/Resources
 
-          cp your-repo MyApp.app/Contents/MacOS/MyApp  # binary
-          
-          cat > MyApp.app/Contents/Info.plist <<'EOF'
+          # Copy the PyInstaller binary into the app bundle
+          cp "dist/IPTV-MAC-STALKER-PLAYER/IPTV-MAC-STALKER-PLAYER" \
+             "IPTV-MAC-STALKER-PLAYER.app/Contents/MacOS/IPTV-MAC-STALKER-PLAYER"
+
+          # Minimal Info.plist
+          cat > IPTV-MAC-STALKER-PLAYER.app/Contents/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
             "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleName</key><string>MyApp</string>
-            <key>CFBundleDisplayName</key><string>MyApp</string>
-            <key>CFBundleExecutable</key><string>MyApp</string>
-            <key>CFBundleIdentifier</key><string>com.github.myapp</string>
+            <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+            <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+            <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
+            <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
             <key>CFBundleVersion</key><string>1.0</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSMinimumSystemVersion</key><string>10.14</string>
             <key>NSHighResolutionCapable</key><true/>
@@ -49,8 +62,29 @@ jobs:
           </plist>
           EOF
 
-      - name: Upload .app artifact
+          # Make sure the app binary is executable
+          chmod +x "IPTV-MAC-STALKER-PLAYER.app/Contents/MacOS/IPTV-MAC-STALKER-PLAYER"
+
+      - name: Ad-hoc sign (not notarized)
+        run: |
+          /usr/bin/codesign --force --deep --sign - "IPTV-MAC-STALKER-PLAYER.app" || true
+
+      # Create DMG with Applications link
+      - name: Create DMG
+        run: |
+          rm -rf dmg
+          mkdir -p dmg
+          cp -R "IPTV-MAC-STALKER-PLAYER.app" dmg/
+          ln -s /Applications dmg/Applications
+
+          # Create compressed DMG (UDZO)
+          hdiutil create -volname "IPTV-MAC-STALKER-PLAYER" \
+            -srcfolder dmg \
+            -ov -fs HFS+ -format UDZO \
+            IPTV-MAC-STALKER-PLAYER.dmg
+
+      - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: MyApp-macOS
-          path: MyApp.app
+          name: IPTV-MAC-STALKER-PLAYER-dmg
+          path: IPTV-MAC-STALKER-PLAYER.dmg
