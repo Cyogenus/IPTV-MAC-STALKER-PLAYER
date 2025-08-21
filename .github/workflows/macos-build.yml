@@ -1,10 +1,10 @@
-name: Build macOS App
+name: Build macOS App (DMG)
 
 on:
-  workflow_dispatch:   # manual run
+  workflow_dispatch:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
 
 jobs:
   build-macos:
@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+      uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -25,32 +25,87 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
-      - name: Build .app with PyInstaller (spec)
+      - name: Build with PyInstaller (spec)
         run: |
           pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
-          test -d "dist/IPTV-MAC-STALKER-PLAYER.app"
+          echo "DIST CONTENTS:"
+          ls -la dist
 
-      # Optional: ad-hoc sign (still not notarized)
-      - name: Ad-hoc sign .app
+      # Normalize to a .app bundle (handle both outputs)
+      - name: Normalize bundle to .app
         run: |
-          /usr/bin/codesign --force --deep --sign - "dist/IPTV-MAC-STALKER-PLAYER.app" || true
+          set -e
+          APP_NAME="IPTV-MAC-STALKER-PLAYER"
+          DIST_DIR="dist"
+          APP_DIR="$DIST_DIR/${APP_NAME}.app"
+          FOLDER_DIR="$DIST_DIR/${APP_NAME}"
 
-      # Create a DMG with Applications alias
+          if [ -d "$APP_DIR" ]; then
+            echo "[+] Found .app already: $APP_DIR"
+          else
+            echo "[i] .app not found; checking for folder build at $FOLDER_DIR"
+            if [ ! -d "$FOLDER_DIR" ]; then
+              echo "[!] Neither $APP_DIR nor $FOLDER_DIR exists"; exit 1
+            fi
+
+            echo "[+] Wrapping folder build into a .app"
+            rm -rf "$APP_DIR"
+            mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+
+            # Pick the main executable (same name as app)
+            if [ -f "$FOLDER_DIR/$APP_NAME" ]; then
+              BIN_PATH="$FOLDER_DIR/$APP_NAME"
+            else
+              # fallback: first executable in folder
+              BIN_PATH=$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm +111 | head -n1)
+              if [ -z "$BIN_PATH" ]; then
+                echo "[!] Could not locate built binary in $FOLDER_DIR"; exit 1
+              fi
+            fi
+
+            cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
+            chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+
+            # Minimal Info.plist
+            cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+              <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+              <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
+              <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
+              <key>CFBundleVersion</key><string>1.0</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>LSMinimumSystemVersion</key><string>10.14</string>
+              <key>NSHighResolutionCapable</key><true/>
+              <key>NSPrincipalClass</key><string>NSApplication</string>
+            </dict>
+            </plist>
+            EOF
+          fi
+
+          echo "[+] Final .app:"
+          ls -la "$APP_DIR"
+          # Save for later steps
+          echo "FINAL_APP_PATH=$APP_DIR" >> $GITHUB_ENV
+
+      - name: Ad-hoc sign (not notarized)
+        run: |
+          /usr/bin/codesign --force --deep --sign - "$FINAL_APP_PATH" || true
+
       - name: Create DMG
         run: |
           rm -rf dmg && mkdir -p dmg
-          cp -R "dist/IPTV-MAC-STALKER-PLAYER.app" dmg/
+          cp -R "$FINAL_APP_PATH" dmg/
           ln -sf /Applications dmg/Applications
           hdiutil create -volname "IPTV-MAC-STALKER-PLAYER" \
             -srcfolder dmg \
             -ov -fs HFS+ -format UDZO \
             "IPTV-MAC-STALKER-PLAYER.dmg"
-
-      # (Optional but nice) Zip the .app for Windows-friendly download too
-      - name: Zip .app
-        run: |
-          cd dist
-          zip -r "../IPTV-MAC-STALKER-PLAYER-app.zip" "IPTV-MAC-STALKER-PLAYER.app"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
@@ -58,7 +113,11 @@ jobs:
           name: IPTV-MAC-STALKER-PLAYER-dmg
           path: IPTV-MAC-STALKER-PLAYER.dmg
 
-      - name: Upload .app (zipped)
+      - name: Zip .app (Windows-friendly)
+        run: |
+          zip -r IPTV-MAC-STALKER-PLAYER-app.zip "$FINAL_APP_PATH"
+
+      - name: Upload zipped .app
         uses: actions/upload-artifact@v4
         with:
           name: IPTV-MAC-STALKER-PLAYER-app
