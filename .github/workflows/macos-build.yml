@@ -29,10 +29,12 @@ jobs:
         run: |
           set -euxo pipefail
           pyinstaller --clean --noconfirm \
+            --windowed \
+            --name "IPTV-MAC-STALKER-PLAYER" \
             --collect-all PyQt6 \
             --exclude-module PyQt6.QtBluetooth \
-            IPTV-MAC-STALKER-PLAYER.spec
-
+            "STALKER PLAYER.py"
+      
           echo "[+] Build complete. Dist contents:"
           ls -la dist
 
