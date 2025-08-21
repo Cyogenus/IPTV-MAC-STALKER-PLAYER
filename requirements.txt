@@ -1,6 +1,6 @@
-PyQt6==6.6
-telethon
-requests==2.31.0
-traceback
-sys
-subprocess
+PyQt5>=5.15.10
+PyQt6>=6.6
+requests>=2.31.0
+qdarkstyle>=3.1
+pytz>=2023.3
+tqdm>=4.66
