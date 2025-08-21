@@ -1,8 +1,6 @@
 PyQt6==6.6
 telethon
 requests==2.31.0
-logging
-re
 traceback
 sys
 subprocess
