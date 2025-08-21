@@ -2,20 +2,28 @@
 # Custom PyInstaller spec for IPTV-MAC-STALKER-PLAYER
 # Excludes unused Qt modules like Bluetooth to prevent Mac build errors
 
+# IPTV-MAC-STALKER-PLAYER.spec
+# (trimmed for clarity)
+
+# -*- mode: python ; coding: utf-8 -*-
+
 block_cipher = None
 
 a = Analysis(
-    ['STALKER PLAYER.py'],   # 👈 replace with your main script name if different
+    ['STALKER PLAYER.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
-    hookspath=[],
-    excludes=[
-        'PyQt6.QtBluetooth',     # 🚫 exclude Bluetooth
-        'PyQt6.QtMultimedia',    # 🚫 exclude Multimedia
-        'PyQt6.QtPositioning',   # 🚫 exclude Positioning
+    hiddenimports=[
+        'PyQt6',
+        'telethon'
     ],
+    hookspath=[],
+    hooksconfig={
+        "PyQt6": {
+            "exclude": ["QtBluetooth"]   # ✅ exclude Bluetooth here
+        }
+    },
     runtime_hooks=[],
     cipher=block_cipher,
 )
@@ -27,12 +35,8 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='IPTV-MAC-STALKER-PLAYER',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=False,   # set True if you want a terminal window
+    name="IPTV-MAC-STALKER-PLAYER",
+    windowed=True,
 )
 
 coll = COLLECT(
@@ -43,5 +47,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='IPTV-MAC-STALKER-PLAYER',
+    name="IPTV-MAC-STALKER-PLAYER",
 )
