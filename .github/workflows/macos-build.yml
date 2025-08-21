@@ -67,25 +67,25 @@ jobs:
 
             # Write Info.plist via a heredoc; terminator must be at column 1
             cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
-  <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
-  <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
-  <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>LSMinimumSystemVersion</key><string>10.14</string>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>NSPrincipalClass</key><string>NSApplication</string>
-</dict>
-</plist>
-PLIST
-          fi
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+              <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+              <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
+              <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
+              <key>CFBundleVersion</key><string>1.0</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>LSMinimumSystemVersion</key><string>10.14</string>
+              <key>NSHighResolutionCapable</key><true/>
+              <key>NSPrincipalClass</key><string>NSApplication</string>
+            </dict>
+            </plist>
+            PLIST
+            fi
 
           echo "FINAL_APP_PATH=$APP_DIR" >> "$GITHUB_ENV"
           echo "[+] Final .app at: $APP_DIR"
