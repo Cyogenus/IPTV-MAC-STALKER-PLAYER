@@ -29,6 +29,7 @@ jobs:
         run: |
           pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
 
+
       - name: Upload macOS .app artifact
         uses: actions/upload-artifact@v4
         with:
