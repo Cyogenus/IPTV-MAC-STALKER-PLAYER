@@ -1,7 +1,7 @@
 name: Build macOS .dmg
 
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -25,32 +25,39 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
-      - name: Build macOS .app with PyInstaller
+      - name: Build app with PyInstaller
         run: |
           set -euxo pipefail
           pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
-      
-          echo "[+] Build complete. Dist contents:"
+
+          echo "[+] Dist contents after build:"
           ls -la dist
 
-      - name: Inspect .app size
+      - name: Normalize .app bundle
         run: |
-          du -sh dist/*.app || true
-          find dist -name "*.app" -maxdepth 1 || true
-          find dist -type d -maxdepth 3
+          set -euxo pipefail
+          APP_PATH="dist/IPTV-MAC-STALKER-PLAYER"
+          FIXED_APP="dist/IPTV-MAC-STALKER-PLAYER.app"
+
+          if [ -d "$APP_PATH" ] && [ ! -d "$FIXED_APP" ]; then
+            echo "[*] Renaming $APP_PATH -> $FIXED_APP"
+            mv "$APP_PATH" "$FIXED_APP"
+          fi
+
+          if [ ! -d "$FIXED_APP" ]; then
+            echo "❌ ERROR: No .app bundle found!"
+            ls -la dist
+            exit 1
+          fi
+
+          echo "[+] Final .app bundle:"
+          ls -la "$FIXED_APP"
 
       - name: Create DMG
         run: |
           set -euxo pipefail
-          APP_DIR=$(find dist -maxdepth 1 -name "*.app" | head -n 1)
+          APP_DIR="dist/IPTV-MAC-STALKER-PLAYER.app"
           DMG="dist/IPTV-MAC-STALKER-PLAYER.dmg"
-
-          if [ -z "$APP_DIR" ]; then
-            echo "❌ ERROR: No .app bundle found in dist/"
-            exit 1
-          fi
-
-          echo "[+] Found app: $APP_DIR"
 
           hdiutil create -volname "IPTV-MAC-STALKER-PLAYER" \
             -srcfolder "$APP_DIR" \
