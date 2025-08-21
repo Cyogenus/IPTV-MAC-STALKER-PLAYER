@@ -28,15 +28,11 @@ jobs:
       - name: Build macOS .app with PyInstaller
         run: |
           set -euxo pipefail
-          pyinstaller --clean --noconfirm \
-            --windowed \
-            --name "IPTV-MAC-STALKER-PLAYER" \
-            --collect-all PyQt6 \
-            --exclude-module PyQt6.QtBluetooth \
-            "STALKER PLAYER.py"
+          pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
       
           echo "[+] Build complete. Dist contents:"
           ls -la dist
+
 
       - name: Inspect .app size
         run: |
