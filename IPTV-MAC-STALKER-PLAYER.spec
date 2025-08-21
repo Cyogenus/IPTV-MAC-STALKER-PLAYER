@@ -12,7 +12,7 @@ a = Analysis(
     hiddenimports=collect_submodules("PyQt6"),
     hookspath=[],
     runtime_hooks=[],
-    excludes=['PyQt6.QtBluetooth'],   # Exclude at analysis
+    excludes=['PyQt6.QtBluetooth'],  # exclude at analysis
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -38,17 +38,15 @@ exe = EXE(
     entitlements_file=None,
 )
 
-# Forcefully remove QtBluetooth.framework BEFORE COLLECT
-def nuke_bluetooth():
-    dist_path = os.path.join("build", "IPTV-MAC-STALKER-PLAYER")
-    for root, dirs, files in os.walk(dist_path):
+# --- PRE-COLLECT CLEANUP ---
+def nuke_bluetooth_build():
+    build_path = os.path.join("build", "IPTV-MAC-STALKER-PLAYER")
+    for root, dirs, _ in os.walk(build_path):
         for d in dirs:
             if "QtBluetooth.framework" in d:
-                bt_path = os.path.join(root, d)
-                print("Removing:", bt_path)
-                shutil.rmtree(bt_path, ignore_errors=True)
+                shutil.rmtree(os.path.join(root, d), ignore_errors=True)
 
-nuke_bluetooth()
+nuke_bluetooth_build()
 
 coll = COLLECT(
     exe,
@@ -61,8 +59,10 @@ coll = COLLECT(
     name='IPTV-MAC-STALKER-PLAYER'
 )
 
-# Run cleanup again after COLLECT
-final_path = os.path.join("dist", "IPTV-MAC-STALKER-PLAYER", "_internal", "PyQt6", "Qt6", "lib")
-bt_path = os.path.join(final_path, "QtBluetooth.framework")
-if os.path.exists(bt_path):
-    shutil.rmtree(bt_path, ignore_errors=True)
+# --- POST-COLLECT CLEANUP ---
+def nuke_bluetooth_dist():
+    bt_path = os.path.join("dist", "IPTV-MAC-STALKER-PLAYER", "_internal", "PyQt6", "Qt6", "lib", "QtBluetooth.framework")
+    if os.path.exists(bt_path):
+        shutil.rmtree(bt_path, ignore_errors=True)
+
+nuke_bluetooth_dist()
