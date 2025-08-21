@@ -31,7 +31,7 @@ jobs:
           echo "DIST CONTENTS:"
           ls -la dist
 
-      # Handles both outputs: dist/<Name>.app OR dist/<Name> (folder)
+      # Normalize to a .app bundle whether PyInstaller output is .app or a folder
       - name: Normalize to .app bundle
         run: |
           set -e
@@ -56,7 +56,7 @@ jobs:
             if [ -f "$FOLDER_DIR/$APP_NAME" ]; then
               BIN_PATH="$FOLDER_DIR/$APP_NAME"
             else
-              BIN_PATH=$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm +111 | head -n1)
+              BIN_PATH=$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm -111 | head -n1)
               if [ -z "$BIN_PATH" ]; then
                 echo "[!] Could not locate an executable in $FOLDER_DIR"; exit 1
               fi
@@ -65,25 +65,26 @@ jobs:
             cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
             chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
-            cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-              <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
-              <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
-              <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
-              <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
-              <key>CFBundleVersion</key><string>1.0</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>LSMinimumSystemVersion</key><string>10.14</string>
-              <key>NSHighResolutionCapable</key><true/>
-              <key>NSPrincipalClass</key><string>NSApplication</string>
-            </dict>
-            </plist>
-            EOF
+            # Write Info.plist via a heredoc; terminator must be at column 1
+            cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+  <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
+  <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
+  <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>10.14</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+</dict>
+</plist>
+PLIST
           fi
 
           echo "FINAL_APP_PATH=$APP_DIR" >> "$GITHUB_ENV"
