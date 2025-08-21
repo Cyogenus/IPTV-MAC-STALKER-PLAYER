@@ -41,18 +41,24 @@ jobs:
 
       - name: Create DMG
         run: |
-          APP="dist/IPTV-MAC-STALKER-PLAYER.app"
+          set -euxo pipefail
+          APP_DIR="dist/IPTV-MAC-STALKER-PLAYER.app"
           DMG="dist/IPTV-MAC-STALKER-PLAYER.dmg"
-
+      
+          if [ ! -d "$APP_DIR" ]; then
+            echo "❌ ERROR: $APP_DIR not found!"
+            exit 1
+          fi
+      
           hdiutil create -volname "IPTV-MAC-STALKER-PLAYER" \
-            -srcfolder "$APP" \
+            -srcfolder "$APP_DIR" \
             -ov -format UDZO "$DMG"
-
+      
           echo "[+] Built DMG:"
           ls -lh "$DMG"
-
+      
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: IPTV-MAC-STALKER-PLAYER-macOS
+          name: IPTV-MAC-STALKER-PLAYER-dmg
           path: dist/IPTV-MAC-STALKER-PLAYER.dmg
