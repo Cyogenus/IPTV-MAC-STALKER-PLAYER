@@ -9,7 +9,6 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,20 +20,22 @@ jobs:
 
       - name: Install dependencies
         run: |
+          set -euxo pipefail
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
 
       - name: Build with PyInstaller (.spec)
         run: |
+          set -euxo pipefail
           pyinstaller --clean --noconfirm IPTV-MAC-STALKER-PLAYER.spec
           echo "DIST CONTENTS:"
           ls -la dist
 
-      # Normalize to a .app bundle whether PyInstaller output is .app or a folder
+      # Normalize to .app regardless of PyInstaller output shape
       - name: Normalize to .app bundle
         run: |
-          set -e
+          set -euxo pipefail
           APP_NAME="IPTV-MAC-STALKER-PLAYER"
           DIST_DIR="dist"
           APP_DIR="$DIST_DIR/${APP_NAME}.app"
@@ -52,12 +53,12 @@ jobs:
             rm -rf "$APP_DIR"
             mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-            # Prefer binary with same name as app; otherwise pick first executable
+            # Prefer a binary named like the app; else first executable file
             if [ -f "$FOLDER_DIR/$APP_NAME" ]; then
               BIN_PATH="$FOLDER_DIR/$APP_NAME"
             else
-              BIN_PATH=$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm -111 | head -n1)
-              if [ -z "$BIN_PATH" ]; then
+              BIN_PATH="$(find "$FOLDER_DIR" -maxdepth 1 -type f -perm -111 | head -n1 || true)"
+              if [ -z "${BIN_PATH:-}" ]; then
                 echo "[!] Could not locate an executable in $FOLDER_DIR"; exit 1
               fi
             fi
@@ -65,26 +66,19 @@ jobs:
             cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
             chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
-            # Write Info.plist via a heredoc; terminator must be at column 1
-            cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-              <key>CFBundleName</key><string>IPTV-MAC-STALKER-PLAYER</string>
-              <key>CFBundleDisplayName</key><string>IPTV-MAC-STALKER-PLAYER</string>
-              <key>CFBundleExecutable</key><string>IPTV-MAC-STALKER-PLAYER</string>
-              <key>CFBundleIdentifier</key><string>com.github.iptv.mac.stalker.player</string>
-              <key>CFBundleVersion</key><string>1.0</string>
-              <key>CFBundleShortVersionString</key><string>1.0</string>
-              <key>CFBundlePackageType</key><string>APPL</string>
-              <key>LSMinimumSystemVersion</key><string>10.14</string>
-              <key>NSHighResolutionCapable</key><true/>
-              <key>NSPrincipalClass</key><string>NSApplication</string>
-            </dict>
-            </plist>
-            PLIST
+            # Create Info.plist using PlistBuddy to avoid heredoc issues
+            PLIST="$APP_DIR/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c "Clear dict" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Add :CFBundleName string $APP_NAME" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string $APP_NAME" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.github.iptv.mac.stalker.player" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.0" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 10.14" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST"
+            /usr/libexec/PlistBuddy -c "Add :NSPrincipalClass string NSApplication" "$PLIST"
           fi
 
           echo "FINAL_APP_PATH=$APP_DIR" >> "$GITHUB_ENV"
@@ -93,10 +87,12 @@ jobs:
 
       - name: Ad-hoc sign (not notarized)
         run: |
+          set -euxo pipefail
           /usr/bin/codesign --force --deep --sign - "$FINAL_APP_PATH" || true
 
       - name: Create DMG (with Applications alias)
         run: |
+          set -euxo pipefail
           rm -rf dmg && mkdir -p dmg
           cp -R "$FINAL_APP_PATH" dmg/
           ln -sf /Applications dmg/Applications
@@ -113,6 +109,7 @@ jobs:
 
       - name: Zip .app (Windows-friendly)
         run: |
+          set -euxo pipefail
           zip -r IPTV-MAC-STALKER-PLAYER-app.zip "$FINAL_APP_PATH"
 
       - name: Upload zipped .app
